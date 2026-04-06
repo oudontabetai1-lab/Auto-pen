@@ -1,0 +1,328 @@
+"""
+ReAct agent loop — the core of Auto-pen.
+
+Flow per iteration:
+  1. REASON  — LLM analyzes state and decides next tool call
+  2. SAFETY  — scope validation + human confirmation gate
+  3. ACT     — tool execution
+  4. OBSERVE — results fed back to LLM
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.rule import Rule
+
+from autopen.agent.prompts import (
+    REPORT_DONE_TOOL,
+    build_denial_message,
+    build_initial_user_message,
+    build_scope_violation_message,
+    build_system_prompt,
+    build_tool_error_message,
+)
+from autopen.llm.base import BaseLLMProvider, LLMMessage, ToolCall
+from autopen.security.confirm import HumanConfirmation
+from autopen.security.scope import ScopeValidator, ScopeViolationError
+from autopen.state.manager import SessionManager
+from autopen.state.models import (
+    FindingCreate,
+    RiskLevel,
+    ScopeConfig,
+    Severity,
+    SessionStatus,
+)
+from autopen.tools.base import BaseTool
+from autopen.tools.registry import ToolRegistry
+
+console = Console()
+
+_RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2, RiskLevel.CRITICAL: 3}
+
+
+class AgentLoop:
+    """
+    Orchestrates the LLM ↔ tool interaction loop.
+
+    The LLM acts as a full autonomous agent that:
+    - reasons about the current pentest state
+    - selects the next tool and parameters
+    - receives tool output and updates its understanding
+    - repeats until the assessment is complete or max_steps is reached
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        llm: BaseLLMProvider,
+        registry: ToolRegistry,
+        manager: SessionManager,
+        scope_validator: ScopeValidator,
+        confirmation: HumanConfirmation,
+        max_steps: int = 40,
+        step_timeout: float = 300.0,
+    ) -> None:
+        self.session_id = session_id
+        self.llm = llm
+        self.registry = registry
+        self.manager = manager
+        self.scope_validator = scope_validator
+        self.confirmation = confirmation
+        self.max_steps = max_steps
+        self.step_timeout = step_timeout
+
+    async def run(self) -> dict[str, Any]:
+        """Start/resume the agent loop for this session. Returns final summary."""
+        session = self.manager.get_session(self.session_id)
+        if not session:
+            raise ValueError(f"Session {self.session_id} not found")
+
+        scope_config = ScopeConfig(**session.scope_config)
+        scope_desc = ", ".join(scope_config.allowed_hosts)
+
+        # Build system prompt
+        system_prompt = build_system_prompt(
+            target=session.target,
+            profile=session.profile,
+            scope_description=scope_desc,
+            authorization_token=session.authorization_token,
+        )
+
+        # Get tool schemas (only available tools + report_done)
+        tool_schemas = self.registry.get_llm_schemas(only_available=True)
+        tool_schemas.append(REPORT_DONE_TOOL)
+
+        # Initialize conversation
+        messages: list[LLMMessage] = [
+            LLMMessage(
+                role="user",
+                content=build_initial_user_message(session.target, session.profile),
+            )
+        ]
+
+        self.manager.update_status(self.session_id, SessionStatus.RUNNING)
+        self.manager.log_action(
+            session_id=self.session_id,
+            action="agent_started",
+            result_summary=f"Target: {session.target}, Profile: {session.profile}",
+        )
+
+        console.print(Rule(f"[bold cyan]Auto-pen — Session {self.session_id[:8]}[/bold cyan]"))
+        console.print(f"[dim]Target:[/dim] {session.target}  [dim]Profile:[/dim] {session.profile}")
+        console.print(f"[dim]LLM:[/dim] {session.llm_provider}/{session.llm_model}\n")
+
+        step = session.step_count
+        final_summary: dict[str, Any] = {}
+
+        try:
+            while step < self.max_steps:
+                step += 1
+                console.print(Rule(f"[dim]Step {step}/{self.max_steps}[/dim]", style="dim"))
+
+                # ── REASON ────────────────────────────────────────────
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    transient=True,
+                ) as progress:
+                    progress.add_task("LLM reasoning...", total=None)
+                    response = await self.llm.chat_with_tools(
+                        messages=messages,
+                        tools=tool_schemas,
+                        system_prompt=system_prompt,
+                    )
+
+                self.manager.increment_step(self.session_id)
+
+                # Display LLM reasoning/text
+                if response.content:
+                    console.print(
+                        Panel(
+                            response.content,
+                            title="[bold green]LLM Reasoning[/bold green]",
+                            border_style="green",
+                            expand=False,
+                        )
+                    )
+
+                # No tool calls → LLM decided to stop without calling report_done
+                if not response.tool_calls:
+                    console.print("[yellow]LLM stopped without calling report_done. Ending loop.[/yellow]")
+                    break
+
+                # Add assistant message to history
+                messages.append(
+                    LLMMessage(
+                        role="assistant",
+                        content=response.content,
+                        tool_calls=response.tool_calls,
+                    )
+                )
+
+                # ── Process each tool call ─────────────────────────────
+                for tool_call in response.tool_calls:
+                    result_content = await self._handle_tool_call(
+                        tool_call=tool_call,
+                        reasoning=response.content or "",
+                    )
+                    messages.append(
+                        LLMMessage(
+                            role="tool",
+                            tool_call_id=tool_call.id,
+                            content=result_content,
+                        )
+                    )
+
+                    # Check if agent signaled completion
+                    if tool_call.name == "report_done":
+                        final_summary = tool_call.arguments
+                        console.print(
+                            Panel(
+                                f"[bold]Assessment complete.[/bold]\n{final_summary.get('summary', '')}",
+                                title="[bold cyan]DONE[/bold cyan]",
+                                border_style="cyan",
+                            )
+                        )
+                        self.manager.update_status(self.session_id, SessionStatus.COMPLETED)
+                        return final_summary
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted by user. Session paused.[/yellow]")
+            self.manager.update_status(self.session_id, SessionStatus.PAUSED)
+        except Exception as e:
+            console.print(f"[red]Agent loop error: {e}[/red]")
+            self.manager.update_status(self.session_id, SessionStatus.FAILED)
+            self.manager.log_action(
+                session_id=self.session_id,
+                action="agent_error",
+                result_summary=str(e),
+            )
+            raise
+
+        if not final_summary:
+            self.manager.update_status(self.session_id, SessionStatus.COMPLETED)
+
+        return final_summary
+
+    # ------------------------------------------------------------------
+    # Tool call handler
+    # ------------------------------------------------------------------
+
+    async def _handle_tool_call(self, tool_call: ToolCall, reasoning: str) -> str:
+        """Process a single tool call: validate scope, confirm if needed, execute."""
+        name = tool_call.name
+        params = tool_call.arguments
+
+        console.print(
+            f"\n[bold cyan]Tool:[/bold cyan] {name}  "
+            f"[dim]params: {self._truncate_params(params)}[/dim]"
+        )
+
+        # report_done is a virtual tool — no execution needed
+        if name == "report_done":
+            return "Report generation triggered."
+
+        # ── Lookup tool ──────────────────────────────────────────────
+        try:
+            tool: BaseTool = self.registry.get(name)
+        except KeyError:
+            return f"Error: Unknown tool '{name}'. Available tools: {[t.name for t in self.registry.all_tools()]}"
+
+        # ── Scope validation ─────────────────────────────────────────
+        target = self._extract_target_from_params(params)
+        if target:
+            try:
+                self.scope_validator.assert_in_scope(target)
+            except ScopeViolationError as e:
+                msg = build_scope_violation_message(name, target)
+                console.print(f"[red]SCOPE VIOLATION:[/red] {e}")
+                self.manager.log_action(
+                    session_id=self.session_id,
+                    action="scope_violation_blocked",
+                    tool_name=name,
+                    params=params,
+                    result_summary=str(e),
+                    risk_level=tool.risk_level,
+                )
+                return msg
+
+        # ── Human confirmation gate ──────────────────────────────────
+        if self.confirmation.needs_confirmation(tool.risk_level):
+            approved = await self.confirmation.ask(
+                tool_name=name,
+                risk_level=tool.risk_level,
+                params=params,
+                reasoning=reasoning,
+            )
+            if not approved:
+                msg = build_denial_message(name)
+                self.manager.log_action(
+                    session_id=self.session_id,
+                    action="human_denied",
+                    tool_name=name,
+                    params=params,
+                    result_summary="Denied by operator",
+                    risk_level=tool.risk_level,
+                    approved_by_human=False,
+                )
+                return msg
+
+        # ── Execute ──────────────────────────────────────────────────
+        self.manager.log_action(
+            session_id=self.session_id,
+            action="tool_executing",
+            tool_name=name,
+            params=params,
+            risk_level=tool.risk_level,
+            approved_by_human=tool.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL),
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn(f"[progress.description]Running {name}..."),
+            transient=True,
+        ) as progress:
+            progress.add_task("", total=None)
+            result = await tool.execute(params)
+
+        # Log result
+        self.manager.log_action(
+            session_id=self.session_id,
+            action="tool_completed",
+            tool_name=name,
+            params=params,
+            result_summary=result.output[:500],
+            risk_level=tool.risk_level,
+        )
+
+        # Display result
+        status = "[green]OK[/green]" if result.success else "[red]FAILED[/red]"
+        console.print(
+            Panel(
+                result.output[:2000] + ("..." if len(result.output) > 2000 else ""),
+                title=f"[bold]{name}[/bold] {status} ({result.duration_seconds:.1f}s)",
+                border_style="blue" if result.success else "red",
+            )
+        )
+
+        return result.output
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _extract_target_from_params(self, params: dict[str, Any]) -> str | None:
+        """Extract the primary target from tool params for scope validation."""
+        for key in ("target", "url", "host", "domain"):
+            if key in params and params[key]:
+                return str(params[key])
+        return None
+
+    def _truncate_params(self, params: dict[str, Any]) -> str:
+        s = str(params)
+        return s[:120] + "..." if len(s) > 120 else s

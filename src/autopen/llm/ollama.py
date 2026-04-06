@@ -1,0 +1,130 @@
+"""Ollama LLM backend (local, privacy-preserving default)."""
+
+from __future__ import annotations
+
+import json
+import uuid
+from typing import Any
+
+import httpx
+
+from autopen.llm.base import BaseLLMProvider, LLMMessage, LLMResponse, ToolCall
+
+
+class OllamaProvider(BaseLLMProvider):
+    """
+    Calls the local Ollama HTTP API.
+
+    Requires a model with tool-calling support, e.g.:
+    - llama3.1, llama3.2, qwen2.5, mistral-nemo
+    """
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        model: str = "llama3.1",
+        base_url: str = "http://localhost:11434",
+        timeout: float = 120.0,
+        temperature: float = 0.1,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.temperature = temperature
+
+    async def chat_with_tools(
+        self,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        system_prompt: str,
+    ) -> LLMResponse:
+        payload = self._build_payload(messages, tools, system_prompt)
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(f"{self.base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        return self._parse_response(data)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_payload(
+        self,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        system_prompt: str,
+    ) -> dict[str, Any]:
+        ollama_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+
+        for m in messages:
+            if m.role == "assistant" and m.tool_calls:
+                ollama_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": m.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                },
+                            }
+                            for tc in m.tool_calls
+                        ],
+                    }
+                )
+            elif m.role == "tool":
+                ollama_messages.append(
+                    {
+                        "role": "tool",
+                        "content": m.content or "",
+                    }
+                )
+            else:
+                ollama_messages.append({"role": m.role, "content": m.content or ""})
+
+        return {
+            "model": self.model,
+            "messages": ollama_messages,
+            "tools": tools,
+            "stream": False,
+            "options": {"temperature": self.temperature},
+        }
+
+    def _parse_response(self, data: dict[str, Any]) -> LLMResponse:
+        message = data.get("message", {})
+        content = message.get("content") or None
+        raw_tool_calls = message.get("tool_calls") or []
+
+        tool_calls: list[ToolCall] = []
+        for tc in raw_tool_calls:
+            func = tc.get("function", {})
+            args = func.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {"raw": args}
+            tool_calls.append(
+                ToolCall(
+                    id=tc.get("id") or str(uuid.uuid4()),
+                    name=func.get("name", ""),
+                    arguments=args,
+                )
+            )
+
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            model=data.get("model", self.model),
+            prompt_tokens=data.get("prompt_eval_count", 0),
+            completion_tokens=data.get("eval_count", 0),
+        )

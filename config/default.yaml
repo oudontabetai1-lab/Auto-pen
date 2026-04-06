@@ -1,0 +1,37 @@
+llm:
+  provider: ollama           # ollama | openai | anthropic
+  model: llama3.1            # Ollama: llama3.1, qwen2.5, mistral-nemo / OpenAI: gpt-4o / Anthropic: claude-opus-4-6
+  base_url: http://localhost:11434
+  api_key: ""                # OpenAI/Anthropic: set via env OPENAI_API_KEY / ANTHROPIC_API_KEY
+  timeout: 120               # seconds
+  temperature: 0.1           # Low temperature for deterministic pentest reasoning
+
+agent:
+  max_steps: 40              # Maximum agent loop iterations
+  step_timeout: 300          # seconds per tool execution
+  auto_confirm_medium: true  # Auto-execute MEDIUM risk tools without prompt
+
+tools:
+  nmap: nmap
+  nikto: nikto
+  nuclei: nuclei
+  sqlmap: sqlmap
+  gobuster: gobuster
+  ffuf: ffuf
+  hydra: hydra
+  msfrpc_host: 127.0.0.1
+  msfrpc_port: 55553
+  msfrpc_user: msf
+  msfrpc_pass: msf
+
+database:
+  url: "sqlite:///autopen.db"
+
+api:
+  host: "0.0.0.0"
+  port: 8080
+
+wordlists:
+  directories: "/usr/share/wordlists/dirb/common.txt"
+  subdomains: "/usr/share/wordlists/amass/subdomains.lst"
+  passwords: "/usr/share/wordlists/rockyou.txt"
