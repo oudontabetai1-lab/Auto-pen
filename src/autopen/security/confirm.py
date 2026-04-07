@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
-from typing import Any
+import uuid
+from datetime import datetime
+from typing import Any, Awaitable, Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -111,3 +114,123 @@ class HumanConfirmation:
         console.print()
         console.print(Panel(content, title=str(title), border_style=color))
         console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket-based confirmation (for API / GUI usage)
+# ---------------------------------------------------------------------------
+
+
+class PendingConfirmation:
+    """
+    Represents a single in-flight approval request.
+    The agent loop awaits `wait()` while the WebSocket handler calls `resolve()`.
+    """
+
+    def __init__(self, request_id: str, timeout: float = 120.0) -> None:
+        self.request_id = request_id
+        self.timeout = timeout
+        self._event: asyncio.Event = asyncio.Event()
+        self._approved: bool | None = None
+
+    def resolve(self, approved: bool) -> None:
+        """Called by the WebSocket message handler when the user responds."""
+        self._approved = approved
+        self._event.set()
+
+    async def wait(self) -> bool:
+        """
+        Awaited by the agent loop.
+        Returns True (approved) or False (denied / timed out).
+        """
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout=self.timeout)
+            return self._approved if self._approved is not None else False
+        except asyncio.TimeoutError:
+            return False  # Timeout = auto-deny
+
+
+class ConfirmationBroker:
+    """
+    Registry of PendingConfirmation objects keyed by request_id.
+
+    Acts as the bridge between:
+    - AgentLoop background task (creates and awaits PendingConfirmation)
+    - WebSocket message handler (calls resolve() when client responds)
+    """
+
+    def __init__(self) -> None:
+        self._pending: dict[str, PendingConfirmation] = {}
+
+    def create(self, request_id: str | None = None, timeout: float = 120.0) -> PendingConfirmation:
+        rid = request_id or str(uuid.uuid4())
+        pc = PendingConfirmation(rid, timeout)
+        self._pending[rid] = pc
+        return pc
+
+    def resolve(self, request_id: str, approved: bool) -> bool:
+        """Returns True if the request_id was found and resolved."""
+        if request_id in self._pending:
+            self._pending[request_id].resolve(approved)
+            del self._pending[request_id]
+            return True
+        return False
+
+    def cancel_all(self) -> None:
+        """Deny all pending confirmations (e.g. on session stop)."""
+        for pc in self._pending.values():
+            pc.resolve(False)
+        self._pending.clear()
+
+
+class WebSocketHumanConfirmation(HumanConfirmation):
+    """
+    HumanConfirmation subclass that uses a WebSocket channel for approval.
+
+    The agent loop calls `ask()`, which:
+    1. Sends a `confirmation_request` event via `event_emitter`
+    2. Waits on asyncio.Event for the client to respond
+    3. Returns the approval decision
+
+    Falls back to auto-deny (safe default) if no WS client is connected.
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        broker: ConfirmationBroker,
+        event_emitter: Callable[[dict[str, Any]], Awaitable[None]],
+        timeout: float = 120.0,
+    ) -> None:
+        super().__init__(interactive=False, auto_approve=False)
+        self.session_id = session_id
+        self.broker = broker
+        self.emit = event_emitter
+        self.timeout = timeout
+
+    async def ask(
+        self,
+        tool_name: str,
+        risk_level: RiskLevel,
+        params: dict[str, Any],
+        reasoning: str = "",
+    ) -> bool:
+        pc = self.broker.create(timeout=self.timeout)
+
+        await self.emit(
+            {
+                "type": "confirmation_request",
+                "session_id": self.session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "payload": {
+                    "request_id": pc.request_id,
+                    "tool_name": tool_name,
+                    "risk_level": str(risk_level),
+                    "params": params,
+                    "reasoning": reasoning[:400],
+                    "timeout_seconds": self.timeout,
+                },
+            }
+        )
+
+        return await pc.wait()

@@ -10,8 +10,10 @@ Flow per iteration:
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from typing import Any
+from datetime import datetime
+from typing import Any, Awaitable, Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -66,6 +68,7 @@ class AgentLoop:
         confirmation: HumanConfirmation,
         max_steps: int = 40,
         step_timeout: float = 300.0,
+        event_emitter: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.llm = llm
@@ -75,6 +78,18 @@ class AgentLoop:
         self.confirmation = confirmation
         self.max_steps = max_steps
         self.step_timeout = step_timeout
+        self._event_emitter = event_emitter
+
+    async def _emit(self, msg: dict[str, Any]) -> None:
+        """Send an event to the WebSocket broadcaster (no-op if not configured)."""
+        if self._event_emitter:
+            try:
+                await self._event_emitter(msg)
+            except Exception:
+                pass  # Never let WS errors crash the agent loop
+
+    def _ts(self) -> str:
+        return datetime.utcnow().isoformat()
 
     async def run(self) -> dict[str, Any]:
         """Start/resume the agent loop for this session. Returns final summary."""
@@ -111,6 +126,12 @@ class AgentLoop:
             action="agent_started",
             result_summary=f"Target: {session.target}, Profile: {session.profile}",
         )
+        await self._emit({
+            "type": "session_status",
+            "session_id": self.session_id,
+            "timestamp": self._ts(),
+            "payload": {"status": "running", "step_count": session.step_count},
+        })
 
         console.print(Rule(f"[bold cyan]Auto-pen — Session {self.session_id[:8]}[/bold cyan]"))
         console.print(f"[dim]Target:[/dim] {session.target}  [dim]Profile:[/dim] {session.profile}")
@@ -149,10 +170,26 @@ class AgentLoop:
                             expand=False,
                         )
                     )
+                    await self._emit({
+                        "type": "log",
+                        "session_id": self.session_id,
+                        "timestamp": self._ts(),
+                        "payload": {
+                            "level": "reasoning",
+                            "message": response.content,
+                            "step": step,
+                        },
+                    })
 
                 # No tool calls → LLM decided to stop without calling report_done
                 if not response.tool_calls:
                     console.print("[yellow]LLM stopped without calling report_done. Ending loop.[/yellow]")
+                    await self._emit({
+                        "type": "log",
+                        "session_id": self.session_id,
+                        "timestamp": self._ts(),
+                        "payload": {"level": "warning", "message": "LLM stopped without calling report_done.", "step": step},
+                    })
                     break
 
                 # Add assistant message to history
@@ -189,11 +226,36 @@ class AgentLoop:
                             )
                         )
                         self.manager.update_status(self.session_id, SessionStatus.COMPLETED)
+                        await self._emit({
+                            "type": "session_status",
+                            "session_id": self.session_id,
+                            "timestamp": self._ts(),
+                            "payload": {
+                                "status": "completed",
+                                "step_count": step,
+                                "summary": final_summary.get("summary", ""),
+                            },
+                        })
                         return final_summary
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted by user. Session paused.[/yellow]")
             self.manager.update_status(self.session_id, SessionStatus.PAUSED)
+            await self._emit({
+                "type": "session_status",
+                "session_id": self.session_id,
+                "timestamp": self._ts(),
+                "payload": {"status": "paused", "step_count": step},
+            })
+        except asyncio.CancelledError:
+            self.manager.update_status(self.session_id, SessionStatus.PAUSED)
+            await self._emit({
+                "type": "session_status",
+                "session_id": self.session_id,
+                "timestamp": self._ts(),
+                "payload": {"status": "paused", "step_count": step},
+            })
+            raise
         except Exception as e:
             console.print(f"[red]Agent loop error: {e}[/red]")
             self.manager.update_status(self.session_id, SessionStatus.FAILED)
@@ -202,10 +264,22 @@ class AgentLoop:
                 action="agent_error",
                 result_summary=str(e),
             )
+            await self._emit({
+                "type": "error",
+                "session_id": self.session_id,
+                "timestamp": self._ts(),
+                "payload": {"code": "agent_error", "message": str(e)},
+            })
             raise
 
         if not final_summary:
             self.manager.update_status(self.session_id, SessionStatus.COMPLETED)
+            await self._emit({
+                "type": "session_status",
+                "session_id": self.session_id,
+                "timestamp": self._ts(),
+                "payload": {"status": "completed", "step_count": step},
+            })
 
         return final_summary
 
@@ -281,6 +355,16 @@ class AgentLoop:
             risk_level=tool.risk_level,
             approved_by_human=tool.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL),
         )
+        await self._emit({
+            "type": "tool_start",
+            "session_id": self.session_id,
+            "timestamp": self._ts(),
+            "payload": {
+                "tool_name": name,
+                "params": params,
+                "risk_level": str(tool.risk_level),
+            },
+        })
 
         with Progress(
             SpinnerColumn(),
@@ -299,6 +383,17 @@ class AgentLoop:
             result_summary=result.output[:500],
             risk_level=tool.risk_level,
         )
+        await self._emit({
+            "type": "tool_complete",
+            "session_id": self.session_id,
+            "timestamp": self._ts(),
+            "payload": {
+                "tool_name": name,
+                "success": result.success,
+                "output_preview": result.output[:500],
+                "duration_seconds": result.duration_seconds,
+            },
+        })
 
         # Display result
         status = "[green]OK[/green]" if result.success else "[red]FAILED[/red]"
