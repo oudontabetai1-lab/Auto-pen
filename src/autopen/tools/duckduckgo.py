@@ -12,11 +12,13 @@ import httpx
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
 
 # DDG lite renders results as table rows; each result link lives inside a
-# <td class="result-link"> cell.  We match the <a href="..."> within that
-# cell.  Using two separate patterns is more robust than a single greedy
-# regex that relies on the exact attribute name/order on the <a> tag.
+# <td class="result-link"> cell.  We match the <a href="..."> within that cell.
+# The class attribute check treats the value as a space-separated token list so
+# it still matches when the <td> carries additional CSS classes alongside
+# "result-link" (e.g. class="result-link sponsored") while avoiding false
+# positives from class names like "not-result-link" or "result-link-extra".
 _TD_RESULT_RE = re.compile(
-    r'<td[^>]+class="result-link"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+    r'<td[^>]+class="(?:[^"]*\s)?result-link(?:\s[^"]*)?"\s*[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
 _TAG_RE = re.compile(r"<[^>]+>")

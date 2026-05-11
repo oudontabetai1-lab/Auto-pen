@@ -24,10 +24,10 @@ class WhatwebTool(BaseTool):
             },
             "aggression": {
                 "type": "integer",
-                "description": "Aggression level: 1=stealthy, 2=aggressive, 3=heavy",
+                "description": "Aggression level: 1=stealthy, 3=aggressive, 4=heavy (most requests)",
                 "default": 1,
                 "minimum": 1,
-                "maximum": 3,
+                "maximum": 4,
             },
         },
         "required": ["target"],

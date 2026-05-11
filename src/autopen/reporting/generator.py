@@ -9,7 +9,7 @@ from typing import Any
 from autopen.reporting.cve_enricher import CveEnricher
 from autopen.reporting.cvss import default_score_for_severity, sort_findings_by_severity
 from autopen.state.manager import SessionManager
-from autopen.state.models import DBFinding, DBSession, Severity
+from autopen.state.models import DBFinding, Severity
 
 SEVERITY_EMOJI = {
     Severity.CRITICAL: "🔴",
