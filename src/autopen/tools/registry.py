@@ -16,6 +16,7 @@ class ToolRegistry:
         self._register_defaults()
 
     def _register_defaults(self) -> None:
+        from autopen.tools.cve_lookup import CveLookupTool
         from autopen.tools.dig import DigTool
         from autopen.tools.duckduckgo import DuckDuckGoTool
         from autopen.tools.ffuf import FfufTool
@@ -30,6 +31,7 @@ class ToolRegistry:
         from autopen.tools.whois import WhoisTool
 
         tools: list[BaseTool] = [
+            CveLookupTool(),
             NmapTool(binary=self._config.get("nmap", "nmap")),
             NiktoTool(binary=self._config.get("nikto", "nikto")),
             NucleiTool(binary=self._config.get("nuclei", "nuclei")),

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from typing import Any
 
+from autopen.reporting.cve_enricher import CveEnricher
 from autopen.reporting.cvss import default_score_for_severity, sort_findings_by_severity
 from autopen.state.manager import SessionManager
 from autopen.state.models import DBFinding, DBSession, Severity
@@ -117,6 +119,29 @@ class ReportGenerator:
                     ]
                 lines += ["---", ""]
 
+        # ── CVE References ───────────────────────────────────────────
+        all_text = " ".join(
+            (f.description or "") + " " + (f.evidence or "") for f in findings
+        )
+        enricher = CveEnricher()
+        cve_ids = enricher.extract_cve_ids(all_text)
+        if cve_ids:
+            cve_data = asyncio.run(enricher.enrich(cve_ids))
+            lines += ["## CVE References", ""]
+            for cve_id, info in cve_data.items():
+                lines.append(f"### {cve_id}")
+                lines.append("")
+                if info.get("severity") and info.get("cvss_score") is not None:
+                    lines.append(f"- **Severity:** {info['severity']} (CVSS {info['cvss_score']})")
+                if info.get("published"):
+                    lines.append(f"- **Published:** {info['published']}")
+                if info.get("description"):
+                    lines.append(f"- **Description:** {info['description']}")
+                for ref in info.get("references", [])[:3]:
+                    lines.append(f"- **Reference:** {ref}")
+                lines.append("")
+            lines += ["---", ""]
+
         # ── Tools Used ───────────────────────────────────────────────
         tools_used = sorted({log.tool_name for log in audit_logs if log.tool_name})
         lines += [
@@ -154,6 +179,13 @@ class ReportGenerator:
 
         findings = sort_findings_by_severity(self.manager.list_findings(session_id))
 
+        all_text = " ".join(
+            (f.description or "") + " " + (f.evidence or "") for f in findings
+        )
+        enricher = CveEnricher()
+        cve_ids = enricher.extract_cve_ids(all_text)
+        cve_references: dict[str, Any] = asyncio.run(enricher.enrich(cve_ids)) if cve_ids else {}
+
         data: dict[str, Any] = {
             "session": {
                 "id": session.id,
@@ -186,6 +218,7 @@ class ReportGenerator:
                 }
                 for f in findings
             ],
+            "cve_references": cve_references,
         }
         return json.dumps(data, indent=2, ensure_ascii=False)
 
