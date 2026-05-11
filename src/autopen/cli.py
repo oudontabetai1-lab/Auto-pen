@@ -13,12 +13,14 @@ Usage examples:
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
 import yaml
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 app = typer.Typer(
@@ -56,6 +58,45 @@ def _get_registry(cfg: dict):
     return ToolRegistry(tool_config=cfg.get("tools", {}))
 
 
+_CLOUD_PROVIDERS = frozenset({"openai", "anthropic"})
+
+
+def _check_cloud_privacy(provider: str, accept_cloud: bool) -> None:
+    """Warn the user when a cloud LLM provider is selected and require acknowledgment."""
+    if provider not in _CLOUD_PROVIDERS:
+        return
+
+    warning_text = (
+        f"[bold]Target information and scan data will be sent to the "
+        f"[yellow]{provider}[/yellow] cloud API.[/bold]\n\n"
+        "Ensure you have authorization to transmit this data to an external service "
+        "and that doing so complies with your engagement rules of engagement."
+    )
+    console.print(
+        Panel(
+            warning_text,
+            title="[bold red] CLOUD PRIVACY WARNING [/bold red]",
+            border_style="red",
+            expand=False,
+        )
+    )
+
+    if accept_cloud:
+        return
+
+    if not sys.stdin.isatty():
+        console.print(
+            "[red]Error:[/red] Non-interactive mode detected. "
+            "Pass [bold]--accept-cloud[/bold] to acknowledge the privacy warning and proceed."
+        )
+        raise typer.Exit(1)
+
+    confirmed = typer.confirm("Do you acknowledge and wish to proceed?", default=False)
+    if not confirmed:
+        console.print("[red]Aborted.[/red]")
+        raise typer.Exit(1)
+
+
 # ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------
@@ -75,6 +116,10 @@ def scan(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config YAML"),
     auto_approve: bool = typer.Option(False, "--auto-approve",
                                        help="Auto-approve HIGH risk operations (use with caution)"),
+    offline: bool = typer.Option(False, "--offline",
+                                  help="Enforce local-only (Ollama) provider; disallows cloud APIs"),
+    accept_cloud: bool = typer.Option(False, "--accept-cloud",
+                                       help="Bypass the cloud-provider privacy confirmation prompt"),
 ) -> None:
     """Start a new automated penetration test."""
 
@@ -83,6 +128,16 @@ def scan(
         provider, model = llm.split("/", 1)
     else:
         provider, model = "ollama", llm
+
+    if offline and provider in _CLOUD_PROVIDERS:
+        console.print(
+            f"[red]Error:[/red] [bold]--offline[/bold] mode requires a local provider "
+            f"(ollama), but '{provider}' was specified. "
+            "Remove [bold]--offline[/bold] or switch to [bold]--llm ollama/<model>[/bold]."
+        )
+        raise typer.Exit(1)
+
+    _check_cloud_privacy(provider, accept_cloud)
 
     cfg = _load_config(config)
     manager = _get_manager(cfg)
