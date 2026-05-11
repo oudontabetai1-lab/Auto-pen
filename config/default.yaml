@@ -23,6 +23,9 @@ tools:
   msfrpc_port: 55553
   msfrpc_user: msf
   msfrpc_pass: msf
+  whois: whois
+  dig: dig
+  whatweb: whatweb
 
 database:
   url: "sqlite:///autopen.db"

@@ -16,6 +16,8 @@ class ToolRegistry:
         self._register_defaults()
 
     def _register_defaults(self) -> None:
+        from autopen.tools.dig import DigTool
+        from autopen.tools.duckduckgo import DuckDuckGoTool
         from autopen.tools.ffuf import FfufTool
         from autopen.tools.gobuster import GobusterTool
         from autopen.tools.hydra import HydraTool
@@ -24,6 +26,8 @@ class ToolRegistry:
         from autopen.tools.nmap import NmapTool
         from autopen.tools.nuclei import NucleiTool
         from autopen.tools.sqlmap import SqlmapTool
+        from autopen.tools.whatweb import WhatwebTool
+        from autopen.tools.whois import WhoisTool
 
         tools: list[BaseTool] = [
             NmapTool(binary=self._config.get("nmap", "nmap")),
@@ -39,6 +43,10 @@ class ToolRegistry:
                 rpc_user=self._config.get("msfrpc_user", "msf"),
                 rpc_pass=self._config.get("msfrpc_pass", "msf"),
             ),
+            WhoisTool(binary=self._config.get("whois", "whois")),
+            DigTool(binary=self._config.get("dig", "dig")),
+            WhatwebTool(binary=self._config.get("whatweb", "whatweb")),
+            DuckDuckGoTool(),
         ]
         for tool in tools:
             self._tools[tool.name] = tool
