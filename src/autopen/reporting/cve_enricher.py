@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
+from typing import Any
 
 import httpx
 
 CVE_PATTERN = re.compile(r'CVE-\d{4}-\d{4,7}', re.IGNORECASE)
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+
+# NVD public rate limit: 5 requests / 30 s without API key
+_NVD_RATE_DELAY = 0.6  # seconds between requests
 
 
 class CveEnricher:
@@ -26,20 +31,62 @@ class CveEnricher:
                 result.append(upper)
         return result
 
-    async def enrich(self, cve_ids: list[str]) -> dict[str, dict]:
+    # ------------------------------------------------------------------
+    # Synchronous API (used by ReportGenerator which is called from
+    # synchronous contexts and may already be inside a running event loop)
+    # ------------------------------------------------------------------
+
+    def enrich_sync(self, cve_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Blocking version of enrich() — safe to call from synchronous code."""
+        if not cve_ids:
+            return {}
+        results: dict[str, dict[str, Any]] = {}
+        with httpx.Client(timeout=10.0) as client:
+            for i, cve_id in enumerate(cve_ids):
+                results[cve_id] = self._fetch_cve_sync(client, cve_id)
+                # Respect NVD public rate limit between requests
+                if i < len(cve_ids) - 1:
+                    time.sleep(_NVD_RATE_DELAY)
+        return results
+
+    def _fetch_cve_sync(self, client: httpx.Client, cve_id: str) -> dict[str, Any]:
+        """Fetch a single CVE synchronously. Returns a normalised dict."""
+        try:
+            response = client.get(NVD_API_URL, params={"cveId": cve_id})
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            return {
+                "id": cve_id,
+                "description": "",
+                "cvss_score": None,
+                "severity": "",
+                "published": "",
+                "references": [],
+                "error": str(exc),
+            }
+        return self._parse_nvd_response(cve_id, data)
+
+    # ------------------------------------------------------------------
+    # Async API (used directly when running inside an async context)
+    # ------------------------------------------------------------------
+
+    async def enrich(self, cve_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Return dict of CVE ID -> NVD data dict for each CVE ID."""
         if not cve_ids:
             return {}
-        results: dict[str, dict] = {}
+        results: dict[str, dict[str, Any]] = {}
         async with httpx.AsyncClient(timeout=10.0) as client:
-            for cve_id in cve_ids:
+            for i, cve_id in enumerate(cve_ids):
                 data = await self._fetch_cve(client, cve_id)
                 results[cve_id] = data
-                await asyncio.sleep(0.5)
+                # Respect NVD public rate limit between requests
+                if i < len(cve_ids) - 1:
+                    await asyncio.sleep(_NVD_RATE_DELAY)
         return results
 
-    async def _fetch_cve(self, client: httpx.AsyncClient, cve_id: str) -> dict:
-        """Fetch single CVE from NVD. Return dict with keys: id, description, cvss_score, severity, published, references."""
+    async def _fetch_cve(self, client: httpx.AsyncClient, cve_id: str) -> dict[str, Any]:
+        """Fetch single CVE from NVD. Return normalised dict."""
         try:
             response = await client.get(NVD_API_URL, params={"cveId": cve_id})
             response.raise_for_status()
@@ -54,7 +101,14 @@ class CveEnricher:
                 "references": [],
                 "error": str(exc),
             }
+        return self._parse_nvd_response(cve_id, data)
 
+    # ------------------------------------------------------------------
+    # Shared parsing logic
+    # ------------------------------------------------------------------
+
+    def _parse_nvd_response(self, cve_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Parse a raw NVD API response into a normalised dict."""
         vulnerabilities = data.get("vulnerabilities", [])
         if not vulnerabilities:
             return {

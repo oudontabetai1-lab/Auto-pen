@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime
 from typing import Any
@@ -126,7 +125,7 @@ class ReportGenerator:
         enricher = CveEnricher()
         cve_ids = enricher.extract_cve_ids(all_text)
         if cve_ids:
-            cve_data = asyncio.run(enricher.enrich(cve_ids))
+            cve_data = enricher.enrich_sync(cve_ids)
             lines += ["## CVE References", ""]
             for cve_id, info in cve_data.items():
                 lines.append(f"### {cve_id}")
@@ -184,7 +183,7 @@ class ReportGenerator:
         )
         enricher = CveEnricher()
         cve_ids = enricher.extract_cve_ids(all_text)
-        cve_references: dict[str, Any] = asyncio.run(enricher.enrich(cve_ids)) if cve_ids else {}
+        cve_references: dict[str, Any] = enricher.enrich_sync(cve_ids) if cve_ids else {}
 
         data: dict[str, Any] = {
             "session": {

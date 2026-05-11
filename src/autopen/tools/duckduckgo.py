@@ -11,7 +11,14 @@ import httpx
 
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
 
-_RESULT_RE = re.compile(r'<a class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.DOTALL)
+# DDG lite renders results as table rows; each result link lives inside a
+# <td class="result-link"> cell.  We match the <a href="..."> within that
+# cell.  Using two separate patterns is more robust than a single greedy
+# regex that relies on the exact attribute name/order on the <a> tag.
+_TD_RESULT_RE = re.compile(
+    r'<td[^>]+class="result-link"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+    re.DOTALL,
+)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -71,7 +78,7 @@ class DuckDuckGoTool(BaseTool):
             )
         duration = time.monotonic() - t0
 
-        matches = _RESULT_RE.findall(html)
+        matches = _TD_RESULT_RE.findall(html)
         results = []
         for href, raw_title in matches[:max_results]:
             title = _TAG_RE.sub("", raw_title).strip()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 
@@ -60,7 +59,6 @@ class CveLookupTool(BaseTool):
                         NVD_API_URL,
                         params={"keywordSearch": keyword, "resultsPerPage": 5},
                     )
-                await asyncio.sleep(0.5)
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
