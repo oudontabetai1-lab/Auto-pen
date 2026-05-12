@@ -80,6 +80,12 @@ _broker: ConfirmationBroker | None = None
 _running_tasks: dict[str, asyncio.Task] = {}
 
 
+class RunRequest(BaseModel):
+    llm_provider: str = "ollama"
+    llm_model: str = "llama3.1"
+    max_steps: int = 40
+
+
 def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = None) -> FastAPI:
     global _manager, _registry, _report_gen, _broadcaster, _broker
 
@@ -173,11 +179,6 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         if not _manager.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-    class RunRequest(BaseModel):
-        llm_provider: str = "ollama"
-        llm_model: str = "llama3.1"
-        max_steps: int = 40
-
     @app.post("/api/v1/sessions/{session_id}/run")
     async def run_session(session_id: str, req: RunRequest) -> dict[str, Any]:
         """Start the agent loop for a session (runs as a background asyncio task)."""
@@ -254,7 +255,8 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
 
     @app.get("/api/v1/sessions/{session_id}/audit-log", response_model=list[AuditLogRead])
     async def get_audit_log(session_id: str) -> Any:
-        if not _manager.get_session(session_id):            raise HTTPException(status_code=404, detail="Session not found")
+        if not _manager.get_session(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
         return _manager.list_audit_logs(session_id)
 
     # ── Reports ──────────────────────────────────────────────
