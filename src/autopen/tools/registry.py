@@ -68,7 +68,14 @@ class ToolRegistry:
 
     def available_tools(self) -> list[BaseTool]:
         """Return only tools whose binary is installed."""
-        return [t for t in self._tools.values() if t.is_available()]
+        result = []
+        for t in self._tools.values():
+            try:
+                if t.is_available():
+                    result.append(t)
+            except Exception:
+                pass
+        return result
 
     def get_llm_schemas(self, only_available: bool = True) -> list[dict]:
         """Return tool schemas for LLM tool-calling, optionally filtering unavailable tools."""

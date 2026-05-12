@@ -87,4 +87,4 @@ class BaseTool(ABC):
 
         return stdout_bytes.decode("utf-8", errors="replace"), stderr_bytes.decode(
             "utf-8", errors="replace"
-        ), proc.returncode or 0
+        ), proc.returncode if proc.returncode is not None else -1
