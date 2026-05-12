@@ -26,11 +26,13 @@ class ToolRegistry:
         from autopen.tools.nikto import NiktoTool
         from autopen.tools.nmap import NmapTool
         from autopen.tools.nuclei import NucleiTool
+        from autopen.tools.record_finding import RecordFindingTool
         from autopen.tools.sqlmap import SqlmapTool
         from autopen.tools.whatweb import WhatwebTool
         from autopen.tools.whois import WhoisTool
 
         tools: list[BaseTool] = [
+            RecordFindingTool(),
             CveLookupTool(),
             NmapTool(binary=self._config.get("nmap", "nmap")),
             NiktoTool(binary=self._config.get("nikto", "nikto")),

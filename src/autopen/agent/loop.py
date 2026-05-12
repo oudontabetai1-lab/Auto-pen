@@ -39,6 +39,7 @@ from autopen.state.models import (
     Severity,
     SessionStatus,
 )
+from autopen.reporting.cvss import severity_from_score
 from autopen.tools.base import BaseTool
 from autopen.tools.registry import ToolRegistry
 
@@ -145,18 +146,31 @@ class AgentLoop:
                 step += 1
                 console.print(Rule(f"[dim]Step {step}/{self.max_steps}[/dim]", style="dim"))
 
-                # ── REASON ────────────────────────────────────────────
+                # ── REASON ─────────────────────────────────────
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
                     transient=True,
                 ) as progress:
                     progress.add_task("LLM reasoning...", total=None)
-                    response = await self.llm.chat_with_tools(
-                        messages=messages,
-                        tools=tool_schemas,
-                        system_prompt=system_prompt,
-                    )
+                    try:
+                        response = await asyncio.wait_for(
+                            self.llm.chat_with_tools(
+                                messages=messages,
+                                tools=tool_schemas,
+                                system_prompt=system_prompt,
+                            ),
+                            timeout=self.step_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        console.print(f"[red]LLM reasoning timed out after {self.step_timeout}s[/red]")
+                        await self._emit({
+                            "type": "error",
+                            "session_id": self.session_id,
+                            "timestamp": self._ts(),
+                            "payload": {"code": "step_timeout", "message": f"LLM reasoning timed out after {self.step_timeout}s"},
+                        })
+                        break
 
                 self.manager.increment_step(self.session_id)
 
@@ -201,7 +215,7 @@ class AgentLoop:
                     )
                 )
 
-                # ── Process each tool call ─────────────────────────────
+                # ── Process each tool call ─────────────────────────
                 for tool_call in response.tool_calls:
                     result_content = await self._handle_tool_call(
                         tool_call=tool_call,
@@ -301,13 +315,17 @@ class AgentLoop:
         if name == "report_done":
             return "Report generation triggered."
 
-        # ── Lookup tool ──────────────────────────────────────────────
+        # record_finding is a virtual tool — persist to DB and emit WS event
+        if name == "record_finding":
+            return await self._handle_record_finding(params)
+
+        # ── Lookup tool ──────────────────────────────
         try:
             tool: BaseTool = self.registry.get(name)
         except KeyError:
             return f"Error: Unknown tool '{name}'. Available tools: {[t.name for t in self.registry.all_tools()]}"
 
-        # ── Scope validation ─────────────────────────────────────────
+        # ── Scope validation ─────────────────────────────
         target = self._extract_target_from_params(params)
         if target:
             try:
@@ -325,7 +343,7 @@ class AgentLoop:
                 )
                 return msg
 
-        # ── Human confirmation gate ──────────────────────────────────
+        # ── Human confirmation gate ──────────────────────
         if self.confirmation.needs_confirmation(tool.risk_level):
             approved = await self.confirmation.ask(
                 tool_name=name,
@@ -346,7 +364,7 @@ class AgentLoop:
                 )
                 return msg
 
-        # ── Execute ──────────────────────────────────────────────────
+        # ── Execute ──────────────────────────────────
         self.manager.log_action(
             session_id=self.session_id,
             action="tool_executing",
@@ -406,6 +424,64 @@ class AgentLoop:
         )
 
         return result.output
+
+    # ------------------------------------------------------------------
+    # record_finding handler
+    # ------------------------------------------------------------------
+
+    async def _handle_record_finding(self, params: dict[str, Any]) -> str:
+        """Persist an LLM-reported finding to the database."""
+        try:
+            raw_severity = params.get("severity", "info").lower()
+            try:
+                severity = Severity(raw_severity)
+            except ValueError:
+                severity = Severity.INFO
+
+            cvss_score = params.get("cvss_score")
+            if cvss_score is None and severity != Severity.INFO:
+                from autopen.reporting.cvss import default_score_for_severity
+                cvss_score = default_score_for_severity(severity)
+
+            finding = self.manager.add_finding(
+                FindingCreate(
+                    session_id=self.session_id,
+                    severity=severity,
+                    title=params.get("title", "Untitled Finding"),
+                    description=params.get("description", ""),
+                    tool_name=params.get("tool_name", "agent"),
+                    evidence=params.get("evidence", ""),
+                    remediation=params.get("remediation", ""),
+                    cvss_score=cvss_score,
+                    target=params.get("target", ""),
+                )
+            )
+            self.manager.log_action(
+                session_id=self.session_id,
+                action="finding_recorded",
+                tool_name="record_finding",
+                result_summary=f"[{severity.upper()}] {finding.title}",
+                risk_level=RiskLevel.LOW,
+            )
+            await self._emit({
+                "type": "finding_discovered",
+                "session_id": self.session_id,
+                "timestamp": self._ts(),
+                "payload": {
+                    "id": finding.id,
+                    "severity": finding.severity,
+                    "title": finding.title,
+                    "target": finding.target,
+                    "cvss_score": finding.cvss_score,
+                },
+            })
+            console.print(
+                f"[bold magenta]Finding recorded:[/bold magenta] "
+                f"[{finding.severity.upper()}] {finding.title}"
+            )
+            return f"Finding recorded: [{finding.severity.upper()}] {finding.title} (id: {finding.id})"
+        except Exception as exc:
+            return f"Error recording finding: {exc}"
 
     # ------------------------------------------------------------------
     # Helpers

@@ -90,7 +90,11 @@ class HydraTool(BaseTool):
             cmd.extend(["-s", str(port)])
 
         if service == "http-post-form" and http_path:
-            cmd.extend([target, f"http-post-form", http_path])
+            # Hydra http-post-form syntax: target "http-post-form" "path:params:failure"
+            cmd.extend([target, "http-post-form", http_path])
+        elif service.startswith("http") and not http_path:
+            # No form path provided; fall back to http-get
+            cmd.extend([target, "http-get"])
         else:
             cmd.extend([target, service])
 

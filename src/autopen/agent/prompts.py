@@ -121,8 +121,9 @@ The following authorization has been provided:
 3. Use findings from each phase to inform your next actions.
 4. When you find something interesting, follow up with deeper investigation.
 5. Prefer targeted, efficient tool usage over broad spraying.
-6. When all applicable phases are complete, call `report_done` with a summary.
-7. If a tool fails or produces no results, briefly note it and move on.
+6. **Call `record_finding` immediately whenever you discover a vulnerability or noteworthy issue.** Do not wait until the end — record findings as soon as they are confirmed.
+7. When all applicable phases are complete, call `report_done` with a summary.
+8. If a tool fails or produces no results, briefly note it and move on.
 
 ## Output Style
 - Think step by step before each tool call.

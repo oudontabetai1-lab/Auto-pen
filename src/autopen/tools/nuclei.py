@@ -16,7 +16,7 @@ class NucleiTool(BaseTool):
         "Covers CVEs, misconfigurations, default credentials, exposed panels, and more. "
         "Use after initial recon to scan for known vulnerabilities."
     )
-    risk_level = RiskLevel.HIGH  # Can trigger IDS/IPS, actively tests exploitability
+    risk_level = RiskLevel.MEDIUM
     parameters_schema = {
         "type": "object",
         "properties": {

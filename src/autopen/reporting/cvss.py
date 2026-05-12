@@ -5,6 +5,14 @@ from __future__ import annotations
 from autopen.state.models import Severity
 
 
+SEVERITY_EMOJI: dict[str, str] = {
+    Severity.CRITICAL: "🔴",
+    Severity.HIGH:     "🟠",
+    Severity.MEDIUM:   "🟡",
+    Severity.LOW:      "🔵",
+    Severity.INFO:     "⚪",
+}
+
 # Approximate CVSS base score ranges by severity
 SEVERITY_SCORE_RANGES: dict[str, tuple[float, float]] = {
     Severity.CRITICAL: (9.0, 10.0),

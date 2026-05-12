@@ -75,9 +75,7 @@ class DBSession(Base):
     llm_model: Mapped[str] = mapped_column(String(100), default="llama3.1")
     step_count: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     findings: Mapped[list[DBFinding]] = relationship(
         "DBFinding", back_populates="session", cascade="all, delete-orphan"

@@ -75,7 +75,6 @@ class SqlmapTool(BaseTool):
             "--level", str(level),
             "--risk", str(risk),
             "--batch",          # non-interactive
-            "--no-logging",
             "--output-dir", "/tmp/sqlmap_output",
         ]
         if data:
