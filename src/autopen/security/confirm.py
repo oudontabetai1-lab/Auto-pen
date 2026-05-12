@@ -33,12 +33,22 @@ class HumanConfirmation:
     In non-interactive mode (e.g. API server), defaults to deny for safety.
     """
 
-    def __init__(self, interactive: bool = True, auto_approve: bool = False) -> None:
+    def __init__(
+        self,
+        interactive: bool = True,
+        auto_approve: bool = False,
+        auto_confirm_medium: bool = True,
+    ) -> None:
         self.interactive = interactive
         self.auto_approve = auto_approve
+        self.auto_confirm_medium = auto_confirm_medium
 
     def needs_confirmation(self, risk_level: RiskLevel) -> bool:
-        return risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+        if risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
+            return True
+        if risk_level == RiskLevel.MEDIUM and not self.auto_confirm_medium:
+            return True
+        return False
 
     async def ask(
         self,

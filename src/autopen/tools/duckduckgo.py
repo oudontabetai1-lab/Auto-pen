@@ -11,17 +11,40 @@ import httpx
 
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
 
-# DDG lite renders results as table rows; each result link lives inside a
-# <td class="result-link"> cell.  We match the <a href="..."> within that cell.
-# The class attribute check treats the value as a space-separated token list so
-# it still matches when the <td> carries additional CSS classes alongside
-# "result-link" (e.g. class="result-link sponsored") while avoiding false
-# positives from class names like "not-result-link" or "result-link-extra".
+# Primary: DDG lite table rows — <td class="result-link"> containing <a href="...">
 _TD_RESULT_RE = re.compile(
     r'<td[^>]+class="(?:[^"]*\s)?result-link(?:\s[^"]*)?"\s*[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
+# Fallback: any external <a href="https://..."> that doesn't look like a DDG UI link
+_FALLBACK_HREF_RE = re.compile(
+    r'<a[^>]+href="(https?://(?!duckduckgo\.com)[^"]+)"[^>]*>(.*?)</a>',
+    re.DOTALL,
+)
 _TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _parse_results(html: str, max_results: int) -> tuple[list[str], str]:
+    """Return (result_lines, parser_used)."""
+    matches = _TD_RESULT_RE.findall(html)
+    if matches:
+        lines = []
+        for href, raw_title in matches[:max_results]:
+            title = _TAG_RE.sub("", raw_title).strip() or href
+            lines.append(f"{len(lines) + 1}. [{title}] {href}")
+        return lines, "primary"
+
+    # HTML structure may have changed — try the fallback
+    fallback = _FALLBACK_HREF_RE.findall(html)
+    seen: set[str] = set()
+    lines = []
+    for href, raw_title in fallback:
+        if href in seen or len(lines) >= max_results:
+            break
+        seen.add(href)
+        title = _TAG_RE.sub("", raw_title).strip() or href
+        lines.append(f"{len(lines) + 1}. [{title}] {href}")
+    return lines, "fallback"
 
 
 class DuckDuckGoTool(BaseTool):
@@ -80,18 +103,20 @@ class DuckDuckGoTool(BaseTool):
             )
         duration = time.monotonic() - t0
 
-        matches = _TD_RESULT_RE.findall(html)
-        results = []
-        for href, raw_title in matches[:max_results]:
-            title = _TAG_RE.sub("", raw_title).strip()
-            results.append(f"{len(results) + 1}. [{title}] {href}")
+        results, parser = _parse_results(html, max_results)
 
-        output = "\n".join(results) if results else "No results found."
+        if results:
+            output = "\n".join(results)
+            if parser == "fallback":
+                output = "[note: using fallback parser — DDG HTML structure may have changed]\n" + output
+        else:
+            output = "No results found."
+
         return ToolResult(
             tool_name=self.name,
             success=True,
             output=output,
             raw_output=html,
-            metadata={"result_count": len(results), "query": query},
+            metadata={"result_count": len(results), "query": query, "parser": parser},
             duration_seconds=duration,
         )

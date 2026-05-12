@@ -183,7 +183,12 @@ def scan(
     )
 
     scope_validator = ScopeValidator(scope_config)
-    confirmation = HumanConfirmation(interactive=True, auto_approve=auto_approve)
+    agent_cfg = cfg.get("agent", {})
+    confirmation = HumanConfirmation(
+        interactive=True,
+        auto_approve=auto_approve,
+        auto_confirm_medium=agent_cfg.get("auto_confirm_medium", True),
+    )
 
     agent = AgentLoop(
         session_id=session.id,
@@ -193,7 +198,7 @@ def scan(
         scope_validator=scope_validator,
         confirmation=confirmation,
         max_steps=max_steps,
-        step_timeout=cfg.get("agent", {}).get("step_timeout", 300),
+        step_timeout=agent_cfg.get("step_timeout", 300),
     )
 
     asyncio.run(agent.run())
@@ -314,13 +319,19 @@ def sessions_resume(
         timeout=llm_cfg.get("timeout", 120),
     )
 
+    agent_cfg = cfg.get("agent", {})
     agent = AgentLoop(
         session_id=session.id,
         llm=llm,
         registry=registry,
         manager=manager,
         scope_validator=ScopeValidator(scope_config),
-        confirmation=HumanConfirmation(interactive=True, auto_approve=auto_approve),
+        confirmation=HumanConfirmation(
+            interactive=True,
+            auto_approve=auto_approve,
+            auto_confirm_medium=agent_cfg.get("auto_confirm_medium", True),
+        ),
+        step_timeout=agent_cfg.get("step_timeout", 300),
     )
     asyncio.run(agent.run())
 

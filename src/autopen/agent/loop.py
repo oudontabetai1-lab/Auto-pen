@@ -1,4 +1,4 @@
-"""
+""" 
 ReAct agent loop — the core of Auto-pen.
 
 Flow per iteration:
@@ -121,6 +121,12 @@ class AgentLoop:
             )
         ]
 
+        # Inject prior-work context when resuming a paused session
+        if session.step_count > 0:
+            ctx = self._build_resume_context(session)
+            messages.append(LLMMessage(role="assistant", content="Understood. Let me review prior progress before continuing."))
+            messages.append(LLMMessage(role="user", content=ctx))
+
         self.manager.update_status(self.session_id, SessionStatus.RUNNING)
         self.manager.log_action(
             session_id=self.session_id,
@@ -146,7 +152,7 @@ class AgentLoop:
                 step += 1
                 console.print(Rule(f"[dim]Step {step}/{self.max_steps}[/dim]", style="dim"))
 
-                # ── REASON ─────────────────────────────────────
+                # ── REASON ────────────────────────────────────────────
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -215,7 +221,7 @@ class AgentLoop:
                     )
                 )
 
-                # ── Process each tool call ─────────────────────────
+                # ── Process each tool call ─────────────────────────────
                 for tool_call in response.tool_calls:
                     result_content = await self._handle_tool_call(
                         tool_call=tool_call,
@@ -319,13 +325,13 @@ class AgentLoop:
         if name == "record_finding":
             return await self._handle_record_finding(params)
 
-        # ── Lookup tool ──────────────────────────────
+        # ── Lookup tool ──────────────────────────────────────────────
         try:
             tool: BaseTool = self.registry.get(name)
         except KeyError:
             return f"Error: Unknown tool '{name}'. Available tools: {[t.name for t in self.registry.all_tools()]}"
 
-        # ── Scope validation ─────────────────────────────
+        # ── Scope validation ─────────────────────────────────────────
         target = self._extract_target_from_params(params)
         if target:
             try:
@@ -343,7 +349,7 @@ class AgentLoop:
                 )
                 return msg
 
-        # ── Human confirmation gate ──────────────────────
+        # ── Human confirmation gate ──────────────────────────────────
         if self.confirmation.needs_confirmation(tool.risk_level):
             approved = await self.confirmation.ask(
                 tool_name=name,
@@ -364,7 +370,7 @@ class AgentLoop:
                 )
                 return msg
 
-        # ── Execute ──────────────────────────────────
+        # ── Execute ──────────────────────────────────────────────────
         self.manager.log_action(
             session_id=self.session_id,
             action="tool_executing",
@@ -482,6 +488,43 @@ class AgentLoop:
             return f"Finding recorded: [{finding.severity.upper()}] {finding.title} (id: {finding.id})"
         except Exception as exc:
             return f"Error recording finding: {exc}"
+
+    # ------------------------------------------------------------------
+    # Resume context builder
+    # ------------------------------------------------------------------
+
+    def _build_resume_context(self, session: Any) -> str:
+        """Summarise prior audit log entries and findings for a resumed session."""
+        logs = self.manager.list_audit_logs(session.id)
+        findings = self.manager.list_findings(session.id)
+
+        tool_lines: list[str] = []
+        for log in logs:
+            if log.action == "tool_completed" and log.tool_name:
+                snippet = (log.result_summary or "")[:300]
+                tool_lines.append(f"- {log.tool_name}: {snippet}")
+            elif log.action == "human_denied" and log.tool_name:
+                tool_lines.append(f"- {log.tool_name}: DENIED by operator")
+            elif log.action == "scope_violation_blocked" and log.tool_name:
+                tool_lines.append(f"- {log.tool_name}: BLOCKED (out of scope)")
+
+        finding_lines = [
+            f"  [{f.severity.upper()}] {f.title} (target: {f.target})"
+            for f in findings
+        ]
+
+        parts = [
+            f"SESSION RESUMED — {session.step_count} steps previously completed.",
+            "",
+            "== Tools Already Run ==",
+            *(tool_lines[:50] if tool_lines else ["(none)"]),
+            "",
+            f"== Findings Recorded So Far ({len(findings)}) ==",
+            *(finding_lines if finding_lines else ["(none)"]),
+            "",
+            "Do NOT repeat work already completed above. Continue the assessment from where it left off.",
+        ]
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Helpers
