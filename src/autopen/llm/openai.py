@@ -53,20 +53,17 @@ class OpenAIProvider(BaseLLMProvider):
         )
 
         oai_messages = self.build_openai_messages(messages, system_prompt)
-        # Reformat arguments back to JSON string for OpenAI SDK
-        for msg in oai_messages:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    args = tc["function"]["arguments"]
-                    if isinstance(args, dict):
-                        tc["function"]["arguments"] = json.dumps(args)
 
-        response = await client.chat.completions.create(
-            model=self.model,
-            messages=oai_messages,  # type: ignore[arg-type]
-            tools=[{"type": "function", "function": t} for t in tools] if tools else None,  # type: ignore[arg-type]
-            temperature=self.temperature,
-        )
+        try:
+            response = await client.chat.completions.create(
+                model=self.model,
+                messages=oai_messages,  # type: ignore[arg-type]
+                tools=[{"type": "function", "function": t} for t in tools] if tools else None,  # type: ignore[arg-type]
+                temperature=self.temperature,
+            )
+        except Exception as exc:
+            cls_name = type(exc).__name__
+            raise RuntimeError(f"OpenAI API error ({cls_name}): {exc}") from exc
 
         choice = response.choices[0]
         msg = choice.message

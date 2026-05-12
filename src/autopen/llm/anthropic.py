@@ -59,14 +59,18 @@ class AnthropicProvider(BaseLLMProvider):
             for t in tools
         ]
 
-        response = await client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system_prompt,
-            messages=ant_messages,
-            tools=ant_tools if ant_tools else anthropic.NOT_GIVEN,  # type: ignore[arg-type]
-            temperature=self.temperature,
-        )
+        try:
+            response = await client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=system_prompt,
+                messages=ant_messages,
+                tools=ant_tools if ant_tools else anthropic.NOT_GIVEN,  # type: ignore[arg-type]
+                temperature=self.temperature,
+            )
+        except Exception as exc:
+            cls_name = type(exc).__name__
+            raise RuntimeError(f"Anthropic API error ({cls_name}): {exc}") from exc
 
         content_text = None
         tool_calls: list[ToolCall] = []
