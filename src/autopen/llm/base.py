@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from typing import Any, Literal
 
@@ -67,7 +68,7 @@ class BaseLLMProvider(ABC):
                                 "type": "function",
                                 "function": {
                                     "name": tc.name,
-                                    "arguments": str(tc.arguments),
+                                    "arguments": json.dumps(tc.arguments),
                                 },
                             }
                             for tc in m.tool_calls

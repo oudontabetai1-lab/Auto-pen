@@ -101,7 +101,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         allow_headers=["*"],
     )
 
-    # ── WebSocket ─────────────────────────────────────────────────────
+    # ── WebSocket ───────────────────────────────────────────────
 
     @app.websocket("/ws/sessions/{session_id}")
     async def ws_session(ws: WebSocket, session_id: str) -> None:
@@ -151,7 +151,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         finally:
             _broadcaster.disconnect(session_id, ws)
 
-    # ── Sessions ──────────────────────────────────────────────────────
+    # ── Sessions ───────────────────────────────────────────────
 
     @app.post("/api/v1/sessions", response_model=SessionRead, status_code=201)
     async def create_session(data: SessionCreate) -> Any:
@@ -201,7 +201,10 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
             event_emitter=emitter,
             timeout=120.0,
         )
-        llm = get_provider(req.llm_provider, req.llm_model)
+        try:
+            llm = get_provider(req.llm_provider, req.llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         agent = AgentLoop(
             session_id=session_id,
@@ -234,7 +237,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
 
         return {"status": "not_running", "session_id": session_id}
 
-    # ── Findings ─────────────────────────────────────────────────────
+    # ── Findings ─────────────────────────────────────────────
 
     @app.get("/api/v1/sessions/{session_id}/findings", response_model=list[FindingRead])
     async def list_findings(session_id: str) -> Any:
@@ -247,15 +250,14 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         data.session_id = session_id
         return _manager.add_finding(data)
 
-    # ── Audit log ────────────────────────────────────────────────────
+    # ── Audit log ────────────────────────────────────────────
 
     @app.get("/api/v1/sessions/{session_id}/audit-log", response_model=list[AuditLogRead])
     async def get_audit_log(session_id: str) -> Any:
-        if not _manager.get_session(session_id):
-            raise HTTPException(status_code=404, detail="Session not found")
+        if not _manager.get_session(session_id):            raise HTTPException(status_code=404, detail="Session not found")
         return _manager.list_audit_logs(session_id)
 
-    # ── Reports ──────────────────────────────────────────────────────
+    # ── Reports ──────────────────────────────────────────────
 
     @app.get("/api/v1/sessions/{session_id}/report")
     async def get_report(session_id: str, format: str = "markdown") -> Any:
@@ -270,7 +272,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=_report_gen.generate_markdown(session_id))
 
-    # ── Tools ────────────────────────────────────────────────────────
+    # ── Tools ────────────────────────────────────────────────
 
     @app.get("/api/v1/tools")
     async def list_tools() -> list[dict[str, Any]]:
@@ -284,7 +286,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
             for t in _registry.all_tools()
         ]
 
-    # ── Health ───────────────────────────────────────────────────────
+    # ── Health ───────────────────────────────────────────────
 
     @app.get("/api/v1/health")
     async def health() -> dict[str, str]:

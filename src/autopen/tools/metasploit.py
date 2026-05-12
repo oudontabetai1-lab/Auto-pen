@@ -131,10 +131,15 @@ class MetasploitTool(BaseTool):
 
         cmd = ["msfconsole", "-q", "-r", rc_path]
         t0 = time.monotonic()
-        stdout, stderr, rc = await self._run_command(cmd, timeout=300)
+        try:
+            stdout, stderr, rc = await self._run_command(cmd, timeout=300)
+        finally:
+            try:
+                os.unlink(rc_path)
+            except OSError:
+                pass
         duration = time.monotonic() - t0
 
-        os.unlink(rc_path)
         output = stdout + (stderr or "")
         success = "session opened" in output.lower() or "success" in output.lower()
 
@@ -168,7 +173,7 @@ class MetasploitTool(BaseTool):
     def _format_search(self, modules: list[dict[str, str]], query: str) -> str:
         if not modules:
             return f"No Metasploit modules found for: {query}"
-        lines = [f"Metasploit modules matching '{query}' (top {len(modules)}):"]
+        lines = [f"Metasploit modules matching '{query}' (top {len(modules)}):\n"]
         for m in modules:
             lines.append(f"  [{m['rank']}] {m['name']}  {m['description']}")
         return "\n".join(lines)
