@@ -131,10 +131,15 @@ class MetasploitTool(BaseTool):
 
         cmd = ["msfconsole", "-q", "-r", rc_path]
         t0 = time.monotonic()
-        stdout, stderr, rc = await self._run_command(cmd, timeout=300)
+        try:
+            stdout, stderr, rc = await self._run_command(cmd, timeout=300)
+        finally:
+            try:
+                os.unlink(rc_path)
+            except OSError:
+                pass
         duration = time.monotonic() - t0
 
-        os.unlink(rc_path)
         output = stdout + (stderr or "")
         success = "session opened" in output.lower() or "success" in output.lower()
 
