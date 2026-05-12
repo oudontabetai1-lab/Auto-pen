@@ -41,10 +41,25 @@ class OllamaProvider(BaseLLMProvider):
     ) -> LLMResponse:
         payload = self._build_payload(messages, tools, system_prompt)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(f"{self.base_url}/api/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(f"{self.base_url}/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                f"Cannot connect to Ollama at {self.base_url}. "
+                "Is the Ollama server running? Try: ollama serve"
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(
+                f"Ollama request timed out after {self.timeout}s. "
+                "The model may be loading or the request is too large."
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Ollama API error {exc.response.status_code}: {exc.response.text[:200]}"
+            ) from exc
 
         return self._parse_response(data)
 

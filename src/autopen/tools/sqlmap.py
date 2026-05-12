@@ -97,7 +97,7 @@ class SqlmapTool(BaseTool):
         summary = self._format_summary(output, injectable, payloads)
         return ToolResult(
             tool_name=self.name,
-            success=True,
+            success=rc == 0,
             output=summary,
             raw_output=output,
             metadata={"injectable": injectable, "payloads": payloads},

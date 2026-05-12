@@ -114,7 +114,7 @@ class ScopeValidator:
     def _domain_matches(self, host: str, pattern: str) -> bool:
         if pattern.startswith("*."):
             suffix = pattern[2:]
-            return host == suffix or host.endswith("." + suffix)
+            return host.endswith("." + suffix)
         return host == pattern
 
     @staticmethod

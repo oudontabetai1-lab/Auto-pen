@@ -267,12 +267,11 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
             raise HTTPException(status_code=404, detail="Session not found")
         if format == "json":
             from fastapi.responses import Response
-            return Response(
-                content=_report_gen.generate_json(session_id),
-                media_type="application/json",
-            )
+            content = await asyncio.to_thread(_report_gen.generate_json, session_id)
+            return Response(content=content, media_type="application/json")
         from fastapi.responses import PlainTextResponse
-        return PlainTextResponse(content=_report_gen.generate_markdown(session_id))
+        content = await asyncio.to_thread(_report_gen.generate_markdown, session_id)
+        return PlainTextResponse(content=content)
 
     # ── Tools ────────────────────────────────────────────────────────
 
