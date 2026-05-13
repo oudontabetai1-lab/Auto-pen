@@ -8,8 +8,6 @@ from autopen.tools.base import BaseTool
 
 
 class ToolRegistry:
-    """Central registry of available security tools."""
-
     def __init__(self, tool_config: dict[str, Any] | None = None) -> None:
         self._tools: dict[str, BaseTool] = {}
         self._config = tool_config or {}
@@ -67,10 +65,15 @@ class ToolRegistry:
         return list(self._tools.values())
 
     def available_tools(self) -> list[BaseTool]:
-        """Return only tools whose binary is installed."""
-        return [t for t in self._tools.values() if t.is_available()]
+        result = []
+        for t in self._tools.values():
+            try:
+                if t.is_available():
+                    result.append(t)
+            except Exception:
+                pass
+        return result
 
     def get_llm_schemas(self, only_available: bool = True) -> list[dict]:
-        """Return tool schemas for LLM tool-calling, optionally filtering unavailable tools."""
         tools = self.available_tools() if only_available else self.all_tools()
         return [t.to_llm_schema() for t in tools]

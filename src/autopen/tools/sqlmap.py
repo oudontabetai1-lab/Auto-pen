@@ -19,40 +19,13 @@ class SqlmapTool(BaseTool):
     parameters_schema = {
         "type": "object",
         "properties": {
-            "url": {
-                "type": "string",
-                "description": "Target URL with parameter(s) to test (e.g. 'http://site.com/page?id=1')",
-            },
-            "data": {
-                "type": "string",
-                "description": "POST data string for testing POST parameters",
-                "default": "",
-            },
-            "level": {
-                "type": "integer",
-                "description": "Test level 1-5 (1=basic, 5=thorough). Default: 1",
-                "default": 1,
-            },
-            "risk": {
-                "type": "integer",
-                "description": "Risk level 1-3 (higher may modify data). Default: 1",
-                "default": 1,
-            },
-            "dump": {
-                "type": "boolean",
-                "description": "Attempt to dump database contents after SQLi confirmed",
-                "default": False,
-            },
-            "dbms": {
-                "type": "string",
-                "description": "Target DBMS hint (mysql, postgresql, mssql, oracle, sqlite)",
-                "default": "",
-            },
-            "cookie": {
-                "type": "string",
-                "description": "HTTP cookie header value for authenticated requests",
-                "default": "",
-            },
+            "url": {"type": "string", "description": "Target URL"},
+            "data": {"type": "string", "description": "POST data", "default": ""},
+            "level": {"type": "integer", "default": 1},
+            "risk": {"type": "integer", "default": 1},
+            "dump": {"type": "boolean", "default": False},
+            "dbms": {"type": "string", "default": ""},
+            "cookie": {"type": "string", "default": ""},
         },
         "required": ["url"],
     }
@@ -70,12 +43,8 @@ class SqlmapTool(BaseTool):
         cookie = params.get("cookie", "")
 
         cmd = [
-            self.binary,
-            "-u", url,
-            "--level", str(level),
-            "--risk", str(risk),
-            "--batch",          # non-interactive
-            "--output-dir", "/tmp/sqlmap_output",
+            self.binary, "-u", url, "--level", str(level), "--risk", str(risk),
+            "--batch", "--output-dir", "/tmp/sqlmap_output",
         ]
         if data:
             cmd.extend(["--data", data])
@@ -97,7 +66,7 @@ class SqlmapTool(BaseTool):
         summary = self._format_summary(output, injectable, payloads)
         return ToolResult(
             tool_name=self.name,
-            success=True,
+            success=rc == 0,
             output=summary,
             raw_output=output,
             metadata={"injectable": injectable, "payloads": payloads},
@@ -111,13 +80,10 @@ class SqlmapTool(BaseTool):
                 payloads.append(line.strip())
         return payloads[:10]
 
-    def _format_summary(
-        self, output: str, injectable: bool, payloads: list[str]
-    ) -> str:
+    def _format_summary(self, output: str, injectable: bool, payloads: list[str]) -> str:
         if injectable:
             lines = ["[VULNERABLE] SQL injection detected!"]
             lines.extend(payloads)
-            # Look for database banner
             for line in output.splitlines():
                 if "web server operating system:" in line.lower():
                     lines.append(line.strip())

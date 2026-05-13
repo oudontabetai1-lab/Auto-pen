@@ -17,7 +17,6 @@ from autopen.tools.base import RiskLevel
 
 console = Console()
 
-# Risk level colors for display
 RISK_COLORS = {
     RiskLevel.LOW: "green",
     RiskLevel.MEDIUM: "yellow",
@@ -57,10 +56,6 @@ class HumanConfirmation:
         params: dict[str, Any],
         reasoning: str = "",
     ) -> bool:
-        """
-        Display the proposed action and ask for user approval.
-        Returns True if approved, False if denied.
-        """
         if self.auto_approve:
             console.print(
                 f"[yellow]AUTO-APPROVE:[/yellow] {tool_name} (risk: {risk_level})"
@@ -89,8 +84,6 @@ class HumanConfirmation:
             console.print("[red]Denied.[/red]")
         return approved
 
-    # ------------------------------------------------------------------
-
     def _display_prompt(
         self,
         tool_name: str,
@@ -103,7 +96,6 @@ class HumanConfirmation:
         title = Text()
         title.append("  ACTION REQUIRES APPROVAL  ", style=f"bold {color} on default")
 
-        # Parameters table
         table = Table(show_header=True, header_style="bold cyan", expand=True)
         table.add_column("Parameter", style="cyan", width=20)
         table.add_column("Value")
@@ -126,11 +118,6 @@ class HumanConfirmation:
         console.print(table)
 
 
-# ---------------------------------------------------------------------------
-# WebSocket-based confirmation (for API / GUI usage)
-# ---------------------------------------------------------------------------
-
-
 class PendingConfirmation:
     """
     Represents a single in-flight approval request.
@@ -149,24 +136,16 @@ class PendingConfirmation:
         self._event.set()
 
     async def wait(self) -> bool:
-        """
-        Awaited by the agent loop.
-        Returns True (approved) or False (denied / timed out).
-        """
         try:
             await asyncio.wait_for(self._event.wait(), timeout=self.timeout)
             return self._approved if self._approved is not None else False
         except asyncio.TimeoutError:
-            return False  # Timeout = auto-deny
+            return False
 
 
 class ConfirmationBroker:
     """
     Registry of PendingConfirmation objects keyed by request_id.
-
-    Acts as the bridge between:
-    - AgentLoop background task (creates and awaits PendingConfirmation)
-    - WebSocket message handler (calls resolve() when client responds)
     """
 
     def __init__(self) -> None:
@@ -196,13 +175,6 @@ class ConfirmationBroker:
 class WebSocketHumanConfirmation(HumanConfirmation):
     """
     HumanConfirmation subclass that uses a WebSocket channel for approval.
-
-    The agent loop calls `ask()`, which:
-    1. Sends a `confirmation_request` event via `event_emitter`
-    2. Waits on asyncio.Event for the client to respond
-    3. Returns the approval decision
-
-    Falls back to auto-deny (safe default) if no WS client is connected.
     """
 
     def __init__(

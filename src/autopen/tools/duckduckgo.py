@@ -11,12 +11,10 @@ import httpx
 
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
 
-# Primary: DDG lite table rows — <td class="result-link"> containing <a href="...">
 _TD_RESULT_RE = re.compile(
     r'<td[^>]+class="(?:[^"]*\s)?result-link(?:\s[^"]*)?"\s*[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
-# Fallback: any external <a href="https://..."> that doesn't look like a DDG UI link
 _FALLBACK_HREF_RE = re.compile(
     r'<a[^>]+href="(https?://(?!duckduckgo\.com)[^"]+)"[^>]*>(.*?)</a>',
     re.DOTALL,
@@ -34,7 +32,6 @@ def _parse_results(html: str, max_results: int) -> tuple[list[str], str]:
             lines.append(f"{len(lines) + 1}. [{title}] {href}")
         return lines, "primary"
 
-    # HTML structure may have changed — try the fallback
     fallback = _FALLBACK_HREF_RE.findall(html)
     seen: set[str] = set()
     lines = []
@@ -50,23 +47,14 @@ def _parse_results(html: str, max_results: int) -> tuple[list[str], str]:
 class DuckDuckGoTool(BaseTool):
     name = "duckduckgo"
     description = (
-        "Passive OSINT search using DuckDuckGo. No API key required. "
-        "Retrieves web search results for a query, useful for gathering public intelligence "
-        "about a target without direct interaction."
+        "Passive OSINT search using DuckDuckGo. No API key required."
     )
     risk_level = RiskLevel.LOW
     parameters_schema = {
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "Search query (e.g. 'site:example.com filetype:pdf')",
-            },
-            "max_results": {
-                "type": "integer",
-                "description": "Maximum number of results to return",
-                "default": 10,
-            },
+            "query": {"type": "string", "description": "Search query"},
+            "max_results": {"type": "integer", "default": 10},
         },
         "required": ["query"],
     }
@@ -78,13 +66,7 @@ class DuckDuckGoTool(BaseTool):
         query = params["query"]
         max_results = params.get("max_results", 10)
         url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
         t0 = time.monotonic()
         try:
@@ -95,11 +77,9 @@ class DuckDuckGoTool(BaseTool):
         except httpx.HTTPError as exc:
             duration = time.monotonic() - t0
             return ToolResult(
-                tool_name=self.name,
-                success=False,
+                tool_name=self.name, success=False,
                 output=f"DuckDuckGo request failed: {exc}",
-                error=str(exc),
-                duration_seconds=duration,
+                error=str(exc), duration_seconds=duration,
             )
         duration = time.monotonic() - t0
 
@@ -113,10 +93,7 @@ class DuckDuckGoTool(BaseTool):
             output = "No results found."
 
         return ToolResult(
-            tool_name=self.name,
-            success=True,
-            output=output,
-            raw_output=html,
+            tool_name=self.name, success=True, output=output, raw_output=html,
             metadata={"result_count": len(results), "query": query, "parser": parser},
             duration_seconds=duration,
         )

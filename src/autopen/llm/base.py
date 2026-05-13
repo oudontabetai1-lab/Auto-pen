@@ -10,36 +10,28 @@ from pydantic import BaseModel
 
 
 class ToolCall(BaseModel):
-    """A tool invocation requested by the LLM."""
-
     id: str
     name: str
     arguments: dict[str, Any]
 
 
 class LLMMessage(BaseModel):
-    """A single message in the conversation."""
-
     role: Literal["system", "user", "assistant", "tool"]
     content: str | None = None
-    tool_calls: list[ToolCall] | None = None  # for role=assistant
-    tool_call_id: str | None = None           # for role=tool
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
 
 
 class LLMResponse(BaseModel):
-    """Response from the LLM."""
-
     content: str | None = None
     tool_calls: list[ToolCall] = []
-    reasoning: str | None = None             # chain-of-thought if available
+    reasoning: str | None = None
     model: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
 
 class BaseLLMProvider(ABC):
-    """Abstract interface that every LLM backend must implement."""
-
     name: str = "base"
 
     @abstractmethod
@@ -54,7 +46,6 @@ class BaseLLMProvider(ABC):
     def build_openai_messages(
         self, messages: list[LLMMessage], system_prompt: str
     ) -> list[dict[str, Any]]:
-        """Convert LLMMessage list to OpenAI-compatible message dicts."""
         result: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for m in messages:
             if m.role == "assistant" and m.tool_calls:
