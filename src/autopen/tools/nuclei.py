@@ -76,6 +76,16 @@ class NucleiTool(BaseTool):
         stdout, stderr, rc = await self._run_command(cmd, timeout=600)
         duration = time.monotonic() - t0
 
+        if rc != 0 and not stdout.strip():
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"nuclei failed: {stderr or 'unknown error'}",
+                raw_output=stderr,
+                error=stderr,
+                duration_seconds=duration,
+            )
+
         findings = self._parse_jsonl(stdout)
         return ToolResult(
             tool_name=self.name,
