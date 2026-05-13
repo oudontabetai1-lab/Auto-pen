@@ -101,6 +101,7 @@ class AgentLoop:
         scope_config = ScopeConfig(**session.scope_config)
         scope_desc = ", ".join(scope_config.allowed_hosts)
 
+        # Build system prompt
         system_prompt = build_system_prompt(
             target=session.target,
             profile=session.profile,
@@ -108,9 +109,11 @@ class AgentLoop:
             authorization_token=session.authorization_token,
         )
 
+        # Get tool schemas (only available tools + report_done)
         tool_schemas = self.registry.get_llm_schemas(only_available=True)
         tool_schemas.append(REPORT_DONE_TOOL)
 
+        # Initialize conversation
         messages: list[LLMMessage] = [
             LLMMessage(
                 role="user",
@@ -118,6 +121,7 @@ class AgentLoop:
             )
         ]
 
+        # Inject prior-work context when resuming a paused session
         if session.step_count > 0:
             ctx = self._build_resume_context(session)
             messages.append(LLMMessage(role="assistant", content="Understood. Let me review prior progress before continuing."))
@@ -148,6 +152,7 @@ class AgentLoop:
                 step += 1
                 console.print(Rule(f"[dim]Step {step}/{self.max_steps}[/dim]", style="dim"))
 
+                # ── REASON ───────────────────────────────────────────
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
@@ -175,6 +180,7 @@ class AgentLoop:
 
                 self.manager.increment_step(self.session_id)
 
+                # Display LLM reasoning/text
                 if response.content:
                     console.print(
                         Panel(
@@ -195,6 +201,7 @@ class AgentLoop:
                         },
                     })
 
+                # No tool calls → LLM decided to stop without calling report_done
                 if not response.tool_calls:
                     console.print("[yellow]LLM stopped without calling report_done. Ending loop.[/yellow]")
                     await self._emit({
@@ -205,6 +212,7 @@ class AgentLoop:
                     })
                     break
 
+                # Add assistant message to history
                 messages.append(
                     LLMMessage(
                         role="assistant",
@@ -213,6 +221,7 @@ class AgentLoop:
                     )
                 )
 
+                # ── Process each tool call ───────────────────────────
                 for tool_call in response.tool_calls:
                     result_content = await self._handle_tool_call(
                         tool_call=tool_call,
@@ -226,6 +235,7 @@ class AgentLoop:
                         )
                     )
 
+                    # Check if agent signaled completion
                     if tool_call.name == "report_done":
                         final_summary = tool_call.arguments
                         console.print(
@@ -293,6 +303,10 @@ class AgentLoop:
 
         return final_summary
 
+    # ------------------------------------------------------------------
+    # Tool call handler
+    # ------------------------------------------------------------------
+
     async def _handle_tool_call(self, tool_call: ToolCall, reasoning: str) -> str:
         """Process a single tool call: validate scope, confirm if needed, execute."""
         name = tool_call.name
@@ -303,17 +317,21 @@ class AgentLoop:
             f"[dim]params: {self._truncate_params(params)}[/dim]"
         )
 
+        # report_done is a virtual tool — no execution needed
         if name == "report_done":
             return "Report generation triggered."
 
+        # record_finding is a virtual tool — persist to DB and emit WS event
         if name == "record_finding":
             return await self._handle_record_finding(params)
 
+        # ── Lookup tool ──────────────────────────────────────────
         try:
             tool: BaseTool = self.registry.get(name)
         except KeyError:
             return f"Error: Unknown tool '{name}'. Available tools: {[t.name for t in self.registry.all_tools()]}"
 
+        # ── Scope validation ─────────────────────────────────────
         target = self._extract_target_from_params(params)
         if target:
             try:
@@ -331,6 +349,7 @@ class AgentLoop:
                 )
                 return msg
 
+        # ── Human confirmation gate ──────────────────────────────
         needs_confirmation = self.confirmation.needs_confirmation(tool.risk_level)
         approved_by_human = False
         if needs_confirmation:
@@ -354,6 +373,7 @@ class AgentLoop:
                 return msg
             approved_by_human = True
 
+        # ── Execute ──────────────────────────────────────────
         self.manager.log_action(
             session_id=self.session_id,
             action="tool_executing",
@@ -381,6 +401,7 @@ class AgentLoop:
             progress.add_task("", total=None)
             result = await tool.execute(params)
 
+        # Log result
         self.manager.log_action(
             session_id=self.session_id,
             action="tool_completed",
@@ -401,6 +422,7 @@ class AgentLoop:
             },
         })
 
+        # Display result
         status = "[green]OK[/green]" if result.success else "[red]FAILED[/red]"
         console.print(
             Panel(
@@ -411,6 +433,10 @@ class AgentLoop:
         )
 
         return result.output
+
+    # ------------------------------------------------------------------
+    # record_finding handler
+    # ------------------------------------------------------------------
 
     async def _handle_record_finding(self, params: dict[str, Any]) -> str:
         """Persist an LLM-reported finding to the database."""
@@ -466,6 +492,10 @@ class AgentLoop:
         except Exception as exc:
             return f"Error recording finding: {exc}"
 
+    # ------------------------------------------------------------------
+    # Resume context builder
+    # ------------------------------------------------------------------
+
     def _build_resume_context(self, session: Any) -> str:
         """Summarise prior audit log entries and findings for a resumed session."""
         logs = self.manager.list_audit_logs(session.id)
@@ -499,7 +529,12 @@ class AgentLoop:
         ]
         return "\n".join(parts)
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     def _extract_target_from_params(self, params: dict[str, Any]) -> str | None:
+        """Extract the primary target from tool params for scope validation."""
         for key in ("target", "url", "host", "domain"):
             if key in params and params[key]:
                 return str(params[key])

@@ -32,7 +32,7 @@ class ReportGenerator:
 
         lines: list[str] = []
 
-        # ── Header ────────────────────────────────────────────
+        # ── Header ────────────────────────────────────────
         lines += [
             "# Penetration Test Report",
             "",
@@ -48,7 +48,7 @@ class ReportGenerator:
             "",
         ]
 
-        # ── Authorization ────────────────────────────────────
+        # ── Authorization ──────────────────────────────────
         lines += [
             "## Authorization",
             "",
@@ -56,7 +56,7 @@ class ReportGenerator:
             "",
         ]
 
-        # ── Executive Summary ──────────────────────────────────
+        # ── Executive Summary ──────────────────────────────
         counts = self._count_by_severity(findings)
         lines += [
             "## Executive Summary",
@@ -74,7 +74,7 @@ class ReportGenerator:
 
         lines += ["", "---", ""]
 
-        # ── Findings ─────────────────────────────────────────
+        # ── Findings ───────────────────────────────────────
         lines += ["## Findings", ""]
         if not findings:
             lines.append("_No findings recorded._")
@@ -114,7 +114,7 @@ class ReportGenerator:
                     ]
                 lines += ["---", ""]
 
-        # ── CVE References ─────────────────────────────────
+        # ── CVE References ──────────────────────────────
         all_text = " ".join(
             (f.description or "") + " " + (f.evidence or "") for f in findings
         )
@@ -137,7 +137,7 @@ class ReportGenerator:
                 lines.append("")
             lines += ["---", ""]
 
-        # ── Tools Used ──────────────────────────────────────
+        # ── Tools Used ────────────────────────────────────
         tools_used = sorted({log.tool_name for log in audit_logs if log.tool_name})
         lines += [
             "## Tools Used",
@@ -148,7 +148,7 @@ class ReportGenerator:
             "",
         ]
 
-        # ── Audit Log Summary ────────────────────────────────
+        # ── Audit Log Summary ──────────────────────────────
         lines += [
             "## Audit Log Summary",
             "",
