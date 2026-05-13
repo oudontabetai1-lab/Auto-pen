@@ -61,6 +61,10 @@ class TestDomainScopeValidation:
     def test_wildcard_excludes_root(self):
         v = _validator("*.example.com")
         # wildcard *.example.com should NOT match example.com itself
+        assert not v.validate("example.com")
+
+    def test_wildcard_excludes_unrelated_domain(self):
+        v = _validator("*.example.com")
         assert not v.validate("other.com")
 
     def test_url_domain_stripped(self):

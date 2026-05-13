@@ -173,7 +173,7 @@ class MetasploitTool(BaseTool):
     def _format_search(self, modules: list[dict[str, str]], query: str) -> str:
         if not modules:
             return f"No Metasploit modules found for: {query}"
-        lines = [f"Metasploit modules matching '{query}' (top {len(modules)}):\n"]
+        lines = [f"Metasploit modules matching '{query}' (top {len(modules)}):"]
         for m in modules:
             lines.append(f"  [{m['rank']}] {m['name']}  {m['description']}")
         return "\n".join(lines)

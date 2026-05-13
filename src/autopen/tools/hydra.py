@@ -105,6 +105,16 @@ class HydraTool(BaseTool):
         output = stdout + ("\n" + stderr if stderr else "")
         credentials = self._extract_credentials(output)
 
+        if rc != 0 and not stdout.strip():
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"hydra failed: {stderr or 'unknown error'}",
+                raw_output=output,
+                error=stderr,
+                duration_seconds=duration,
+            )
+
         return ToolResult(
             tool_name=self.name,
             success=True,
@@ -118,7 +128,7 @@ class HydraTool(BaseTool):
         creds = []
         for line in output.splitlines():
             line_lower = line.lower()
-            if "[" in line and "] login:" in line_lower:
+            if "[" in line and "login:" in line_lower and "password:" in line_lower:
                 # Hydra success line: [port][service] host: <ip>  login: <user>  password: <pass>
                 try:
                     login_part = line.split("login:")[1].split("password:")[0].strip()
