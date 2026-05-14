@@ -77,7 +77,7 @@ class OpenAIProvider(BaseLLMProvider):
                     try:
                         args = json.loads(args)
                     except json.JSONDecodeError:
-                        args = {"raw": args}
+                        args = {}
                 tool_calls.append(
                     ToolCall(id=tc.id or str(uuid.uuid4()), name=tc.function.name, arguments=args)
                 )

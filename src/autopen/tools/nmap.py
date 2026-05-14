@@ -72,6 +72,18 @@ class NmapTool(BaseTool):
             )
 
         parsed = self._parse_xml(stdout)
+
+        if parsed.get("parse_error"):
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output="nmap: failed to parse XML output",
+                raw_output=stdout,
+                error="XML parse error",
+                metadata=parsed,
+                duration_seconds=duration,
+            )
+
         summary = self._format_summary(parsed)
 
         return ToolResult(
@@ -133,9 +145,13 @@ class NmapTool(BaseTool):
                 if state_el is None or state_el.get("state") != "open":
                     continue
                 svc_el = port.find("service")
+                try:
+                    portid = int(port.get("portid") or 0)
+                except ValueError:
+                    portid = 0
                 ports_info.append(
                     {
-                        "port": int(port.get("portid", 0)),
+                        "port": portid,
                         "protocol": port.get("protocol", "tcp"),
                         "service": svc_el.get("name", "") if svc_el is not None else "",
                         "version": svc_el.get("version", "") if svc_el is not None else "",
