@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
+from autopen.security.args import UnsafeArgumentError, assert_file_path_safe
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
+
+
+def _is_file_path(value: str) -> bool:
+    """Heuristic: only treat as a file path when it actually points at a readable file.
+
+    The previous implementation used "/" in value, which broke for usernames like
+    ``admin/test`` and unsafely accepted anything containing a slash.
+    """
+    return ("/" in value or "\\" in value) and os.path.isfile(value)
 
 
 class HydraTool(BaseTool):
@@ -73,13 +84,36 @@ class HydraTool(BaseTool):
         threads = params.get("threads", 4)
         stop_on_first = params.get("stop_on_first", True)
 
-        # Determine if input is a file path or literal value
-        u_flag = "-L" if "/" in usernames else "-l"
-        p_flag = "-P" if "/" in passwords else "-p"
+        # Reject obvious shell metacharacters in any LLM-supplied string.
+        try:
+            for label, val in (
+                ("target", target),
+                ("service", service),
+                ("usernames", usernames),
+                ("passwords", passwords),
+                ("http_path", http_path),
+            ):
+                if val and any(c in val for c in "`$;&|\n\r"):
+                    raise UnsafeArgumentError(f"{label} contains shell metacharacters: {val!r}")
+            # Wordlist paths additionally must exist on disk before we pass -L/-P.
+            if _is_file_path(usernames):
+                assert_file_path_safe(usernames)
+            if _is_file_path(passwords):
+                assert_file_path_safe(passwords)
+        except UnsafeArgumentError as exc:
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"hydra refused unsafe arguments: {exc}",
+                error=str(exc),
+            )
+
+        u_flag = "-L" if _is_file_path(usernames) else "-l"
+        p_flag = "-P" if _is_file_path(passwords) else "-p"
 
         cmd = [
             self.binary,
-            "-t", str(threads),
+            "-t", str(int(threads)),
             u_flag, usernames,
             p_flag, passwords,
             "-V",       # verbose: show attempt per line

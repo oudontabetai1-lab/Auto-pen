@@ -81,3 +81,18 @@ mypy src/
 ## Legal
 
 Auto-pen must only be used against systems you own or have explicit written authorization to test. Unauthorized penetration testing is illegal and unethical.
+
+Beyond explicit authorization from the target's owner, **automated vulnerability scanning and credential brute-forcing are themselves regulated in some jurisdictions** (e.g. the US Computer Fraud and Abuse Act, the UK Computer Misuse Act, Germany's §202c StGB, Japan's Unauthorized Computer Access Law). It is the operator's responsibility to confirm that the planned activity is lawful under the laws of the operator's jurisdiction, the target's jurisdiction, and any jurisdiction the traffic transits. The maintainers of this project accept no responsibility for misuse.
+
+Wrapper integrations include exploitation frameworks (Metasploit, sqlmap) — keep the human confirmation gate enabled for HIGH/CRITICAL risk tools unless you have explicit authorization to run unattended.
+
+## Configuration
+
+The REST API binds to `0.0.0.0:8080` by default. To allow the Next.js UI (or any other browser app) to talk to it, set `AUTOPEN_ALLOWED_ORIGINS` to a comma-separated list of origins, e.g.:
+
+```bash
+AUTOPEN_ALLOWED_ORIGINS="http://localhost:3000,https://autopen.example.com" \
+  auto-pen server
+```
+
+WebSocket subscriptions require the short-lived `ws_token` returned by `POST /api/v1/sessions` (and re-issued by `POST /api/v1/sessions/{id}/run`). Pass it as `?token=…` when opening the WebSocket; without it the server rejects the upgrade with close code `4401`.

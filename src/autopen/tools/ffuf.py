@@ -6,6 +6,12 @@ import json
 import time
 from typing import Any
 
+from autopen.security.args import (
+    UnsafeArgumentError,
+    assert_file_path_safe,
+    sanitize_header_name,
+    sanitize_header_value,
+)
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
 
 
@@ -77,12 +83,34 @@ class FfufTool(BaseTool):
         threads = params.get("threads", 40)
         extensions = params.get("extensions", "")
 
+        try:
+            assert_file_path_safe(wordlist)
+            if url.startswith("-"):
+                raise UnsafeArgumentError(f"URL starts with '-': {url!r}")
+            if not all(c.isdigit() or c == "," for c in filter_codes):
+                raise UnsafeArgumentError(f"filter_codes must be digits/commas, got {filter_codes!r}")
+            method_upper = method.upper()
+            if method_upper not in {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}:
+                raise UnsafeArgumentError(f"Unsupported HTTP method: {method!r}")
+            sanitized_headers: list[tuple[str, str]] = []
+            for k, v in (headers or {}).items():
+                sanitized_headers.append(
+                    (sanitize_header_name(str(k)), sanitize_header_value(str(v)))
+                )
+        except UnsafeArgumentError as exc:
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"ffuf refused unsafe arguments: {exc}",
+                error=str(exc),
+            )
+
         cmd = [
             self.binary,
             "-u", url,
             "-w", wordlist,
-            "-X", method,
-            "-t", str(threads),
+            "-X", method_upper,
+            "-t", str(int(threads)),
             "-fc", filter_codes,
             "-o", "/dev/stdout",
             "-of", "json",
@@ -90,9 +118,17 @@ class FfufTool(BaseTool):
         ]
         if data:
             cmd.extend(["-d", data])
-        for k, v in headers.items():
+        for k, v in sanitized_headers:
             cmd.extend(["-H", f"{k}: {v}"])
         if extensions:
+            # ffuf -e: comma-separated extension list like ".php,.html"
+            if not all(c.isalnum() or c in ".,_-" for c in extensions):
+                return ToolResult(
+                    tool_name=self.name,
+                    success=False,
+                    output=f"ffuf refused unsafe extensions: {extensions!r}",
+                    error="invalid extensions",
+                )
             cmd.extend(["-e", extensions])
 
         t0 = time.monotonic()

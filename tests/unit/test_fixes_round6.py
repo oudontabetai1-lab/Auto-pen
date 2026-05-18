@@ -161,8 +161,13 @@ class TestOpenAIJsonDecodeError:
         from autopen.llm.openai import OpenAIProvider
         return OpenAIProvider(model="gpt-4o", api_key="test-key")
 
-    async def test_malformed_json_args_become_empty_dict(self):
-        """When tool call args are not valid JSON, arguments should be {} not {\"raw\": ...}."""
+    async def test_malformed_json_args_are_dropped_with_notice(self):
+        """C6: malformed tool_call JSON is now dropped (not executed with empty args).
+
+        Instead of silently invoking the tool with ``{}``, the provider should
+        skip the call entirely and surface a synthetic message so the agent
+        loop can re-prompt the model.
+        """
         from unittest.mock import MagicMock, AsyncMock
         provider = self._make_provider()
 
@@ -192,9 +197,8 @@ class TestOpenAIJsonDecodeError:
             instance.chat.completions.create = AsyncMock(return_value=mock_response)
             result = await provider.chat_with_tools([], [], "sys")
 
-        assert len(result.tool_calls) == 1
-        assert result.tool_calls[0].arguments == {}
-        assert "raw" not in result.tool_calls[0].arguments
+        assert result.tool_calls == []
+        assert "tool_call dropped" in (result.content or "")
 
     async def test_valid_json_args_are_parsed_correctly(self):
         from unittest.mock import MagicMock, AsyncMock

@@ -2,8 +2,20 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createSession, runSession } from "@/lib/api";
+import { createSession, rememberSessionToken, runSession } from "@/lib/api";
 import type { ScanProfile } from "@/lib/types";
+
+// Accepts IPv4/IPv6 (with optional brackets), CIDRs, hostnames with optional
+// :port, and URLs. Excludes obvious shell-meta and leading-dash forms.
+const TARGET_RE =
+  /^(?:[a-z][a-z0-9+.\-]*:\/\/)?(?:\[[0-9a-fA-F:]+\]|[0-9a-zA-Z.\-_]+)(?:\/\d{1,3})?(?::\d+)?(?:\/[A-Za-z0-9./_\-?&=%~+]*)?$/;
+
+function isValidTarget(value: string): boolean {
+  if (!value) return false;
+  if (value.startsWith("-")) return false;
+  if (/[\s;|&`$\r\n]/.test(value)) return false;
+  return TARGET_RE.test(value);
+}
 
 const PROFILES: ScanProfile[] = ["web", "network", "cloud", "ctf"];
 const LLM_PRESETS = [
@@ -28,6 +40,17 @@ export function NewSessionForm() {
     e.preventDefault();
     if (!target.trim() || !authToken.trim()) return;
 
+    if (!isValidTarget(target.trim())) {
+      setError(
+        "ターゲットは IP / CIDR / ホスト名 / URL のいずれかで指定してください。"
+      );
+      return;
+    }
+    if (authToken.trim().length < 20) {
+      setError("認可宣言文は20文字以上で入力してください。");
+      return;
+    }
+
     const preset = LLM_PRESETS[llmPreset];
     const allowed_hosts = scope.trim()
       ? [target, ...scope.split(",").map((s) => s.trim()).filter(Boolean)]
@@ -36,7 +59,7 @@ export function NewSessionForm() {
     setSubmitting(true);
     setError(null);
     try {
-      const session = await createSession({
+      const created = await createSession({
         target: target.trim(),
         profile,
         authorization_token: authToken.trim(),
@@ -44,14 +67,16 @@ export function NewSessionForm() {
         llm_provider: preset.provider,
         llm_model: preset.model,
       });
+      rememberSessionToken(created.session.id, created.ws_token);
 
-      await runSession(session.id, {
+      const runResp = await runSession(created.session.id, {
         llm_provider: preset.provider,
         llm_model: preset.model,
         max_steps: maxSteps,
       });
+      rememberSessionToken(created.session.id, runResp.ws_token);
 
-      router.push(`/sessions/${session.id}`);
+      router.push(`/sessions/${created.session.id}`);
     } catch (err) {
       setError(String(err));
     } finally {

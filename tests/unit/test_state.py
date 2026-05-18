@@ -26,7 +26,7 @@ def sample_session(manager):
     data = SessionCreate(
         target="192.168.1.1",
         profile=ScanProfile.NETWORK,
-        authorization_token="test auth",
+        authorization_token="test auth statement for unit test",
         scope=ScopeConfig(allowed_hosts=["192.168.1.1"]),
         llm_provider="ollama",
         llm_model="llama3.1",
@@ -39,7 +39,7 @@ class TestSessionCRUD:
         data = SessionCreate(
             target="10.0.0.1",
             profile=ScanProfile.WEB,
-            authorization_token="auth",
+            authorization_token="authorization statement for the unit test",
         )
         session = manager.create_session(data)
         assert session.id
@@ -83,7 +83,7 @@ class TestSessionCRUD:
         data = SessionCreate(
             target="example.com",
             profile=ScanProfile.WEB,
-            authorization_token="auth",
+            authorization_token="authorization statement for the unit test",
             scope=None,
         )
         session = manager.create_session(data)
@@ -125,7 +125,7 @@ class TestFindingCRUD:
         other = manager.create_session(SessionCreate(
             target="10.0.0.2",
             profile=ScanProfile.WEB,
-            authorization_token="auth",
+            authorization_token="authorization statement for the unit test",
         ))
         manager.add_finding(FindingCreate(
             session_id=sample_session.id,

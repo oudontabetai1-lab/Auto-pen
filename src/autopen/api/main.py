@@ -3,19 +3,30 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
+import logging
+import os
+import secrets
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Body,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from autopen.llm.factory import get_provider
+from autopen.llm.factory import LLMConfigError, get_provider
 from autopen.reporting.generator import ReportGenerator
 from autopen.security.confirm import ConfirmationBroker, WebSocketHumanConfirmation
 from autopen.security.scope import ScopeValidator
-from autopen.state.manager import SessionManager
+from autopen.state.manager import InvalidStatusTransitionError, SessionManager
 from autopen.state.models import (
     AuditLogRead,
     FindingCreate,
@@ -26,6 +37,9 @@ from autopen.state.models import (
     SessionStatus,
 )
 from autopen.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Real-time broadcast layer
@@ -69,6 +83,62 @@ class SessionBroadcaster:
 
 
 # ---------------------------------------------------------------------------
+# Per-session access tokens for WebSocket auth (C2)
+# ---------------------------------------------------------------------------
+
+
+class SessionTokenStore:
+    """Mints and validates short-lived tokens that gate WS connections.
+
+    A token is issued when a session is created and again every time the
+    session is started. Knowing a session UUID alone is no longer enough to
+    subscribe to its WebSocket — the caller must also present this token.
+    """
+
+    def __init__(self) -> None:
+        self._tokens: dict[str, str] = {}
+
+    def issue(self, session_id: str) -> str:
+        token = secrets.token_urlsafe(32)
+        self._tokens[session_id] = token
+        return token
+
+    def verify(self, session_id: str, token: str | None) -> bool:
+        expected = self._tokens.get(session_id)
+        if not expected or not token:
+            return False
+        return secrets.compare_digest(expected, token)
+
+    def revoke(self, session_id: str) -> None:
+        self._tokens.pop(session_id, None)
+
+
+# ---------------------------------------------------------------------------
+# Simple in-memory rate limiter (H7)
+# ---------------------------------------------------------------------------
+
+
+class RateLimiter:
+    """Token-bucket-ish per-IP limiter scoped to specific endpoint keys."""
+
+    def __init__(self, max_requests: int, window_seconds: float) -> None:
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self._buckets: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str) -> bool:
+        now = time.monotonic()
+        bucket = self._buckets[key]
+        # Drop expired hits
+        while bucket and now - bucket[0] > self.window:
+            bucket.popleft()
+        if len(bucket) >= self.max_requests:
+            return False
+        bucket.append(now)
+        return True
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -77,23 +147,36 @@ _registry: ToolRegistry | None = None
 _report_gen: ReportGenerator | None = None
 _broadcaster: SessionBroadcaster | None = None
 _broker: ConfirmationBroker | None = None
+_tokens: SessionTokenStore | None = None
 _running_tasks: dict[str, asyncio.Task] = {}
 
 
 class RunRequest(BaseModel):
-    llm_provider: str = "ollama"
-    llm_model: str = "llama3.1"
-    max_steps: int = 40
+    llm_provider: str = Field(default="ollama", max_length=50, pattern=r"^[a-zA-Z][a-zA-Z0-9_\-]*$")
+    llm_model: str = Field(default="llama3.1", max_length=100, pattern=r"^[a-zA-Z0-9_./:\-]+$")
+    max_steps: int = Field(default=40, ge=1, le=200)
+
+
+def _allowed_origins() -> list[str]:
+    """Parse AUTOPEN_ALLOWED_ORIGINS env var; default to local Next.js dev."""
+    raw = os.environ.get("AUTOPEN_ALLOWED_ORIGINS", "http://localhost:3000")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    # Refuse the wildcard when credentials would be needed.
+    return [o for o in origins if o != "*"] or ["http://localhost:3000"]
 
 
 def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = None) -> FastAPI:
-    global _manager, _registry, _report_gen, _broadcaster, _broker
+    global _manager, _registry, _report_gen, _broadcaster, _broker, _tokens
 
     _manager = SessionManager(db_url=db_url)
     _registry = ToolRegistry(tool_config=tool_config or {})
     _report_gen = ReportGenerator(_manager)
     _broadcaster = SessionBroadcaster()
     _broker = ConfirmationBroker()
+    _tokens = SessionTokenStore()
+
+    rate_limiter = RateLimiter(max_requests=60, window_seconds=60.0)
+    create_limiter = RateLimiter(max_requests=10, window_seconds=60.0)
 
     app = FastAPI(
         title="Auto-pen API",
@@ -102,34 +185,36 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=_allowed_origins(),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
+
+    def _client_ip(request: Request) -> str:
+        return request.client.host if request.client else "anonymous"
 
     # ── WebSocket ─────────────────────────────────────────────────────
 
     @app.websocket("/ws/sessions/{session_id}")
-    async def ws_session(ws: WebSocket, session_id: str) -> None:
+    async def ws_session(ws: WebSocket, session_id: str, token: str | None = None) -> None:
         """
         Bidirectional WebSocket per session.
 
-        Server → Client:
-          log | tool_start | tool_complete | confirmation_request |
-          finding_discovered | session_status | error
-
-        Client → Server:
-          { type: "confirmation_response", payload: { request_id, approved } }
-          { type: "ping" }
+        Auth: the caller must supply ``?token=…`` matching the value returned
+        by ``POST /api/v1/sessions`` (or ``/run``). The first-time WS request
+        carrying an unknown session or bad token is refused with 4401/4404.
         """
         if not _manager.get_session(session_id):
             await ws.close(code=4004, reason="Session not found")
+            return
+        if not _tokens.verify(session_id, token):
+            await ws.close(code=4401, reason="Invalid or missing session token")
             return
 
         await ws.accept()
         _broadcaster.connect(session_id, ws)
 
-        # Send current session status on connect
         s = _manager.get_session(session_id)
         await ws.send_json({
             "type": "session_status",
@@ -159,12 +244,21 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
 
     # ── Sessions ──────────────────────────────────────────────────────
 
-    @app.post("/api/v1/sessions", response_model=SessionRead, status_code=201)
-    async def create_session(data: SessionCreate) -> Any:
-        return _manager.create_session(data)
+    @app.post("/api/v1/sessions", status_code=201)
+    async def create_session(request: Request, data: SessionCreate = Body(...)) -> dict[str, Any]:
+        if not create_limiter.check(_client_ip(request)):
+            raise HTTPException(status_code=429, detail="Too many session-create requests")
+        session = _manager.create_session(data)
+        ws_token = _tokens.issue(session.id)
+        return {
+            "session": SessionRead.model_validate(session, from_attributes=True).model_dump(mode="json"),
+            "ws_token": ws_token,
+        }
 
     @app.get("/api/v1/sessions", response_model=list[SessionRead])
-    async def list_sessions() -> Any:
+    async def list_sessions(request: Request) -> Any:
+        if not rate_limiter.check(_client_ip(request)):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
         return _manager.list_sessions()
 
     @app.get("/api/v1/sessions/{session_id}", response_model=SessionRead)
@@ -178,6 +272,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
     async def delete_session(session_id: str) -> None:
         if not _manager.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
+        _tokens.revoke(session_id)
 
     @app.post("/api/v1/sessions/{session_id}/run")
     async def run_session(session_id: str, req: RunRequest) -> dict[str, Any]:
@@ -204,7 +299,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         )
         try:
             llm = get_provider(req.llm_provider, req.llm_model)
-        except ValueError as exc:
+        except (ValueError, LLMConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         agent = AgentLoop(
@@ -222,7 +317,9 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
         _running_tasks[session_id] = task
         task.add_done_callback(lambda _t: _running_tasks.pop(session_id, None))
 
-        return {"status": "started", "session_id": session_id}
+        # Re-issue a fresh token so the UI can subscribe with current creds.
+        ws_token = _tokens.issue(session_id)
+        return {"status": "started", "session_id": session_id, "ws_token": ws_token}
 
     @app.post("/api/v1/sessions/{session_id}/stop")
     async def stop_session(session_id: str) -> dict[str, Any]:
@@ -271,7 +368,7 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
             return Response(content=content, media_type="application/json")
         from fastapi.responses import PlainTextResponse
         content = await asyncio.to_thread(_report_gen.generate_markdown, session_id)
-        return PlainTextResponse(content=content)
+        return PlainTextResponse(content=content, media_type="text/markdown")
 
     # ── Tools ────────────────────────────────────────────────────────
 
@@ -292,5 +389,12 @@ def create_app(db_url: str = "sqlite:///autopen.db", tool_config: dict | None = 
     @app.get("/api/v1/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": "0.1.0"}
+
+    # ── Friendly handler for invalid status transitions ───────────────
+
+    @app.exception_handler(InvalidStatusTransitionError)
+    async def _on_invalid_transition(_request: Request, exc: InvalidStatusTransitionError):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     return app

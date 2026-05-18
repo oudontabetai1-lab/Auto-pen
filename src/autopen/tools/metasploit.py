@@ -124,7 +124,8 @@ class MetasploitTool(BaseTool):
         rc_script = "\n".join(rc_lines)
 
         # Write to temp file and execute
-        import tempfile, os
+        import tempfile
+        import os
         with tempfile.NamedTemporaryFile(mode="w", suffix=".rc", delete=False) as f:
             f.write(rc_script)
             rc_path = f.name
