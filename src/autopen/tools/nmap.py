@@ -6,7 +6,18 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from autopen.security.args import UnsafeArgumentError, split_extra_args
 from autopen.tools.base import BaseTool, RiskLevel, ToolResult
+
+# Allow-list of nmap flag prefixes accepted via extra_args. Anything that
+# could read/write the filesystem or execute scripts beyond stock NSE is
+# explicitly excluded.
+_NMAP_EXTRA_ARG_PREFIXES = (
+    "-p", "-sV", "-sS", "-sT", "-sU", "-sn", "-Pn", "-A", "-T",
+    "-O", "-n", "-R", "--top-ports", "--open", "--reason",
+    "--min-rate", "--max-rate", "--max-retries", "--host-timeout",
+    "--script=", "--script-args=",
+)
 
 
 class NmapTool(BaseTool):
@@ -56,7 +67,15 @@ class NmapTool(BaseTool):
         scan_type = params.get("scan_type", "version")
         extra_args = params.get("extra_args", "")
 
-        cmd = self._build_command(target, ports, scan_type, extra_args)
+        try:
+            cmd = self._build_command(target, ports, scan_type, extra_args)
+        except UnsafeArgumentError as exc:
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"nmap refused unsafe arguments: {exc}",
+                error=str(exc),
+            )
         t0 = time.monotonic()
         stdout, stderr, rc = await self._run_command(cmd, timeout=300)
         duration = time.monotonic() - t0
@@ -113,11 +132,19 @@ class NmapTool(BaseTool):
         cmd.extend(type_flags.get(scan_type, ["-sV", "-T4"]))
 
         if ports:
+            # nmap port spec: digits, commas, dashes, and protocol prefixes (T:, U:).
+            if not all(c.isalnum() or c in ",-:" for c in ports):
+                raise UnsafeArgumentError(f"Invalid nmap port spec: {ports!r}")
             cmd.extend(["-p", ports])
 
         if extra_args:
-            cmd.extend(extra_args.split())
+            cmd.extend(
+                split_extra_args(extra_args, allowed_prefixes=_NMAP_EXTRA_ARG_PREFIXES)
+            )
 
+        # Reject targets beginning with '-' so they can't be confused for flags.
+        if target.startswith("-"):
+            raise UnsafeArgumentError(f"Target starts with '-': {target!r}")
         cmd.append(target)
         return cmd
 

@@ -12,7 +12,7 @@ from autopen.reporting.cvss import (
     default_score_for_severity,
     sort_findings_by_severity,
 )
-from autopen.state.manager import SessionManager
+from autopen.state.manager import SessionManager, mask_authorization_token
 from autopen.state.models import DBFinding, Severity
 
 
@@ -49,10 +49,15 @@ class ReportGenerator:
         ]
 
         # ── Authorization ────────────────────────────────────
+        # Show only a masked fingerprint of the authorization token.
+        # The full text is preserved in the database for legal audit but
+        # is intentionally kept out of shareable Markdown reports.
         lines += [
             "## Authorization",
             "",
-            f"> {session.authorization_token}",
+            "Written authorization confirmed at session creation. Token reference:",
+            "",
+            f"> `{mask_authorization_token(session.authorization_token)}`",
             "",
         ]
 
@@ -65,8 +70,8 @@ class ReportGenerator:
             f"using the **{session.profile.upper()}** profile. "
             f"The assessment identified **{len(findings)}** finding(s):",
             "",
-            f"| Severity | Count |",
-            f"|----------|-------|",
+            "| Severity | Count |",
+            "|----------|-------|",
         ]
         for sev in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO):
             emoji = SEVERITY_EMOJI.get(sev, "")
@@ -126,6 +131,10 @@ class ReportGenerator:
             for cve_id, info in cve_data.items():
                 lines.append(f"### {cve_id}")
                 lines.append("")
+                if info.get("error"):
+                    lines.append(
+                        f"- :warning: **CVE metadata lookup failed:** `{info['error']}`"
+                    )
                 if info.get("severity") and info.get("cvss_score") is not None:
                     lines.append(f"- **Severity:** {info['severity']} (CVSS {info['cvss_score']})")
                 if info.get("published"):
@@ -190,6 +199,7 @@ class ReportGenerator:
                 "llm_provider": session.llm_provider,
                 "llm_model": session.llm_model,
                 "step_count": session.step_count,
+                "authorization_token_ref": mask_authorization_token(session.authorization_token),
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
             },

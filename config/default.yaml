@@ -8,8 +8,37 @@ llm:
 
 agent:
   max_steps: 40              # Maximum agent loop iterations
-  step_timeout: 300          # seconds per tool execution
+  step_timeout: 300          # seconds per LLM reasoning step
   auto_confirm_medium: true  # Auto-execute MEDIUM risk tools without prompt
+
+# Per-tool subprocess timeouts (seconds). Tools fall back to `default`.
+tool_timeouts:
+  default: 300
+  nmap: 300
+  gobuster: 300
+  ffuf: 300
+  nikto: 600
+  sqlmap: 600
+  hydra: 600
+  nuclei: 600
+  whois: 30
+  dig: 30
+  whatweb: 60
+
+# Per-profile recommended scope shape (advisory; enforced upstream by CLI/UI).
+profiles:
+  web:
+    description: "HTTP/HTTPS application testing — single host/URL preferred."
+    max_hosts: 5
+  network:
+    description: "Infrastructure scanning — supports CIDR ranges."
+    max_hosts: 1024
+  cloud:
+    description: "Cloud service enumeration — list specific domains/subdomains."
+    max_hosts: 50
+  ctf:
+    description: "Lab/CTF environment — keep to a single in-scope host."
+    max_hosts: 1
 
 tools:
   nmap: nmap
@@ -34,7 +63,16 @@ api:
   host: "0.0.0.0"
   port: 8080
 
+# Wordlist paths. Auto-pen will probe each candidate in order and use the
+# first one that exists. Override with absolute paths for non-Kali images.
 wordlists:
-  directories: "/usr/share/wordlists/dirb/common.txt"
-  subdomains: "/usr/share/wordlists/amass/subdomains.lst"
-  passwords: "/usr/share/wordlists/rockyou.txt"
+  directories:
+    - "/usr/share/wordlists/dirb/common.txt"
+    - "/usr/share/seclists/Discovery/Web-Content/common.txt"
+    - "/usr/share/wordlists/common.txt"
+  subdomains:
+    - "/usr/share/wordlists/amass/subdomains.lst"
+    - "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
+  passwords:
+    - "/usr/share/wordlists/rockyou.txt"
+    - "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-10000.txt"

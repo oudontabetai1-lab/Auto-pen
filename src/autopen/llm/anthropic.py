@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from autopen.llm.base import BaseLLMProvider, LLMMessage, LLMResponse, ToolCall
@@ -69,19 +68,33 @@ class AnthropicProvider(BaseLLMProvider):
                 temperature=self.temperature,
             )
         except Exception as exc:
-            cls_name = type(exc).__name__
-            raise RuntimeError(f"Anthropic API error ({cls_name}): {exc}") from exc
+            # Distinguish auth / rate-limit / network failures so the caller
+            # can decide whether to retry.
+            auth_err = getattr(anthropic, "AuthenticationError", None)
+            rate_err = getattr(anthropic, "RateLimitError", None)
+            timeout_err = getattr(anthropic, "APITimeoutError", None)
+            conn_err = getattr(anthropic, "APIConnectionError", None)
+
+            if auth_err and isinstance(exc, auth_err):
+                raise RuntimeError(f"Anthropic auth error: invalid API key — {exc}") from exc
+            if rate_err and isinstance(exc, rate_err):
+                raise RuntimeError(f"Anthropic rate-limited: {exc}") from exc
+            if timeout_err and isinstance(exc, timeout_err):
+                raise TimeoutError(f"Anthropic timeout: {exc}") from exc
+            if conn_err and isinstance(exc, conn_err):
+                raise ConnectionError(f"Anthropic connection error: {exc}") from exc
+            raise RuntimeError(f"Anthropic API error ({type(exc).__name__}): {exc}") from exc
 
         content_text = None
         tool_calls: list[ToolCall] = []
 
-        for block in response.content:
+        for idx, block in enumerate(response.content):
             if block.type == "text":
                 content_text = block.text
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(
-                        id=block.id or str(uuid.uuid4()),
+                        id=block.id or f"call_{idx}",
                         name=block.name,
                         arguments=block.input if isinstance(block.input, dict) else {},
                     )

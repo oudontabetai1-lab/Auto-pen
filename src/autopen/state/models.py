@@ -23,6 +23,28 @@ class SessionStatus(str, Enum):
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
+    INCOMPLETE = "incomplete"   # ran to max_steps without report_done
+    TIMED_OUT = "timed_out"     # LLM step exceeded step_timeout
+
+
+# Allowed state transitions. Any pair not present here is rejected by
+# SessionManager.update_status() to prevent silent corruption (e.g. moving
+# a COMPLETED session back to RUNNING).
+ALLOWED_STATUS_TRANSITIONS: dict[SessionStatus, set[SessionStatus]] = {
+    SessionStatus.PENDING:    {SessionStatus.RUNNING, SessionStatus.FAILED},
+    SessionStatus.RUNNING:    {
+        SessionStatus.PAUSED,
+        SessionStatus.COMPLETED,
+        SessionStatus.FAILED,
+        SessionStatus.INCOMPLETE,
+        SessionStatus.TIMED_OUT,
+    },
+    SessionStatus.PAUSED:     {SessionStatus.RUNNING, SessionStatus.FAILED},
+    SessionStatus.COMPLETED:  set(),
+    SessionStatus.FAILED:     set(),
+    SessionStatus.INCOMPLETE: {SessionStatus.RUNNING},
+    SessionStatus.TIMED_OUT:  {SessionStatus.RUNNING},
+}
 
 
 class ScanProfile(str, Enum):
@@ -146,17 +168,23 @@ class ScopeConfig(BaseModel):
 class SessionCreate(BaseModel):
     """Input schema for creating a new pentest session."""
 
-    target: str = Field(description="Primary target (IP, CIDR, URL, or hostname)")
+    target: str = Field(
+        min_length=1,
+        max_length=512,
+        description="Primary target (IP, CIDR, URL, or hostname)",
+    )
     profile: ScanProfile = Field(description="Scan profile: web | network | cloud | ctf")
     authorization_token: str = Field(
-        description="Written authorization statement confirming permission to test"
+        min_length=20,
+        max_length=4096,
+        description="Written authorization statement confirming permission to test",
     )
     scope: ScopeConfig | None = Field(
         default=None,
         description="Scope config. If None, target is used as the sole allowed host.",
     )
-    llm_provider: str = Field(default="ollama")
-    llm_model: str = Field(default="llama3.1")
+    llm_provider: str = Field(default="ollama", max_length=50, pattern=r"^[a-zA-Z][a-zA-Z0-9_\-]*$")
+    llm_model: str = Field(default="llama3.1", max_length=100, pattern=r"^[a-zA-Z0-9_./:\-]+$")
 
 
 class SessionRead(BaseModel):

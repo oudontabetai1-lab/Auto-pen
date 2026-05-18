@@ -133,7 +133,7 @@ export default function SessionDetailPage({
       {/* Tab content */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         {tab === "logs" && (
-          <div className="h-[70vh]">
+          <div className="h-[55vh] sm:h-[70vh] min-h-0 flex flex-col">
             <LogStream logs={logs} />
           </div>
         )}

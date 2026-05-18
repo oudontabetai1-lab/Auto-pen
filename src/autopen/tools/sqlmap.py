@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import time
 from typing import Any
 
@@ -69,25 +71,53 @@ class SqlmapTool(BaseTool):
         dbms = params.get("dbms", "")
         cookie = params.get("cookie", "")
 
+        if url.startswith("-"):
+            return ToolResult(
+                tool_name=self.name,
+                success=False,
+                output=f"sqlmap refused URL starting with '-': {url!r}",
+                error="invalid url",
+            )
+        # Per-invocation output dir so concurrent sessions don't collide.
+        output_dir = tempfile.mkdtemp(prefix="sqlmap_")
         cmd = [
             self.binary,
             "-u", url,
-            "--level", str(level),
-            "--risk", str(risk),
+            "--level", str(int(level)),
+            "--risk", str(int(risk)),
             "--batch",          # non-interactive
-            "--output-dir", "/tmp/sqlmap_output",
+            "--output-dir", output_dir,
         ]
         if data:
             cmd.extend(["--data", data])
         if dump:
             cmd.append("--dump")
         if dbms:
+            if not dbms.replace("-", "").replace("_", "").isalnum():
+                shutil.rmtree(output_dir, ignore_errors=True)
+                return ToolResult(
+                    tool_name=self.name,
+                    success=False,
+                    output=f"sqlmap refused invalid DBMS hint: {dbms!r}",
+                    error="invalid dbms",
+                )
             cmd.extend(["--dbms", dbms])
         if cookie:
+            if "\r" in cookie or "\n" in cookie:
+                shutil.rmtree(output_dir, ignore_errors=True)
+                return ToolResult(
+                    tool_name=self.name,
+                    success=False,
+                    output="sqlmap refused cookie containing CR/LF",
+                    error="invalid cookie",
+                )
             cmd.extend(["--cookie", cookie])
 
         t0 = time.monotonic()
-        stdout, stderr, rc = await self._run_command(cmd, timeout=600)
+        try:
+            stdout, stderr, rc = await self._run_command(cmd, timeout=600)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
         duration = time.monotonic() - t0
 
         output = stdout + ("\n" + stderr if stderr else "")

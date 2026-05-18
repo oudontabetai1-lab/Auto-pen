@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-import uuid
+import logging
 from typing import Any
 
 import httpx
 
 from autopen.llm.base import BaseLLMProvider, LLMMessage, LLMResponse, ToolCall
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -120,21 +122,40 @@ class OllamaProvider(BaseLLMProvider):
         raw_tool_calls = message.get("tool_calls") or []
 
         tool_calls: list[ToolCall] = []
-        for tc in raw_tool_calls:
+        synthetic_notes: list[str] = []
+        for idx, tc in enumerate(raw_tool_calls):
             func = tc.get("function", {})
             args = func.get("arguments", {})
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = {"raw": args}
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "Dropping malformed Ollama tool_call %s: %s — args=%r",
+                        func.get("name"),
+                        exc,
+                        args,
+                    )
+                    synthetic_notes.append(
+                        f"[tool_call dropped: invalid JSON arguments for "
+                        f"{func.get('name')!r}: {exc}]"
+                    )
+                    continue
+            if not isinstance(args, dict):
+                synthetic_notes.append(
+                    f"[tool_call dropped: arguments not a JSON object for {func.get('name')!r}]"
+                )
+                continue
             tool_calls.append(
                 ToolCall(
-                    id=tc.get("id") or str(uuid.uuid4()),
+                    id=tc.get("id") or f"call_{idx}",
                     name=func.get("name", ""),
                     arguments=args,
                 )
             )
+
+        if synthetic_notes:
+            content = (content or "") + "\n" + "\n".join(synthetic_notes)
 
         return LLMResponse(
             content=content,

@@ -77,7 +77,10 @@ class TestReportGeneratorMarkdown:
         gen = _make_generator()
         with patch("autopen.reporting.cve_enricher.CveEnricher.enrich_sync", return_value={}):
             md = gen.generate_markdown("sess-1")
-        assert "authorized for testing" in md
+        # Token is masked (H2). Verify the masked fingerprint shows up,
+        # never the plaintext token.
+        assert "auth-token sha256:" in md
+        assert "authorized for testing" not in md
 
     def test_no_findings_message(self):
         gen = _make_generator(findings=[])

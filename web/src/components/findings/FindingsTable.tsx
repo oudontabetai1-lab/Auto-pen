@@ -22,11 +22,23 @@ const SEV_EMOJI: Record<Severity, string> = {
 export function FindingsTable({ findings }: { findings: FindingRead[] }) {
   const [filter, setFilter] = useState<Severity | "all">("all");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const sorted = [...findings].sort(
     (a, b) => (SEV_ORDER[a.severity as Severity] ?? 99) - (SEV_ORDER[b.severity as Severity] ?? 99)
   );
-  const filtered = filter === "all" ? sorted : sorted.filter((f) => f.severity === filter);
+  const q = search.trim().toLowerCase();
+  const filtered = sorted
+    .filter((f) => filter === "all" || f.severity === filter)
+    .filter((f) => {
+      if (!q) return true;
+      return (
+        f.title.toLowerCase().includes(q) ||
+        f.description.toLowerCase().includes(q) ||
+        f.target.toLowerCase().includes(q) ||
+        f.tool_name.toLowerCase().includes(q)
+      );
+    });
 
   const counts = findings.reduce<Record<string, number>>((acc, f) => {
     acc[f.severity] = (acc[f.severity] ?? 0) + 1;
@@ -43,6 +55,15 @@ export function FindingsTable({ findings }: { findings: FindingRead[] }) {
 
   return (
     <div className="space-y-4">
+      {/* Search */}
+      <input
+        type="search"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="検出結果を検索 (title / description / target / tool)…"
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+
       {/* Summary chips */}
       <div className="flex flex-wrap gap-2">
         <button

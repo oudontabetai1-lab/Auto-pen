@@ -2,16 +2,28 @@ import type { SessionRead } from "@/lib/types";
 import Link from "next/link";
 
 const STATUS_STYLES: Record<string, string> = {
-  pending:   "bg-gray-100 text-gray-700",
-  running:   "bg-blue-100 text-blue-700 animate-pulse",
-  paused:    "bg-yellow-100 text-yellow-700",
-  completed: "bg-green-100 text-green-700",
-  failed:    "bg-red-100 text-red-700",
+  pending:    "bg-gray-100 text-gray-700",
+  running:    "bg-blue-100 text-blue-700 animate-pulse",
+  paused:     "bg-yellow-100 text-yellow-700",
+  completed:  "bg-green-100 text-green-700",
+  failed:     "bg-red-100 text-red-700",
+  incomplete: "bg-purple-100 text-purple-700",
+  timed_out:  "bg-orange-100 text-orange-700",
 };
+
+const TIME_FMT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 export function SessionCard({ session }: { session: SessionRead }) {
   const style = STATUS_STYLES[session.status] ?? "bg-gray-100 text-gray-700";
-  const created = new Date(session.created_at).toLocaleString();
+  // Backend timestamps come from datetime.utcnow().isoformat() with no tz suffix.
+  // Treat them as UTC so the displayed local time is correct.
+  const isoUtc = session.created_at.endsWith("Z")
+    ? session.created_at
+    : `${session.created_at}Z`;
+  const created = TIME_FMT.format(new Date(isoUtc));
 
   return (
     <Link href={`/sessions/${session.id}`}>

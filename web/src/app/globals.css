@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Tailwind v4: opt into class-based dark mode (system preference still
+ * applies via the @media block below, but components can also opt in
+ * explicitly with dark:… utilities). */
+@variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;

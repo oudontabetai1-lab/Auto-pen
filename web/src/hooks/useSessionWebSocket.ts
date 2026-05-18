@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SessionWebSocket } from "@/lib/ws";
+import { getSessionToken } from "@/lib/api";
 import type {
   LogEntry,
   SessionStatus,
@@ -28,6 +29,9 @@ export interface UseSessionWebSocketReturn {
  * - pendingConfirmation      — non-null when operator approval is required
  * - approve() / deny()       — send confirmation_response
  * - isConnected              — WebSocket connection state
+ *
+ * The connection is keyed solely on `sessionId`; we hold the message-handler
+ * closure in a ref so that re-renders don't repeatedly tear it down.
  */
 export function useSessionWebSocket(
   sessionId: string | null,
@@ -40,7 +44,8 @@ export function useSessionWebSocket(
   const [pendingConfirmation, setPendingConfirmation] =
     useState<WsConfirmationRequestPayload | null>(null);
 
-  const handleMessage = useCallback((msg: WsServerMessage) => {
+  const handleMessageRef = useRef<(msg: WsServerMessage) => void>(() => {});
+  handleMessageRef.current = (msg: WsServerMessage) => {
     switch (msg.type) {
       case "session_status":
         setStatus(msg.payload.status);
@@ -72,41 +77,41 @@ export function useSessionWebSocket(
       case "pong":
         break;
     }
-  }, []);
+  };
 
   useEffect(() => {
     if (!sessionId) return;
 
-    const ws = new SessionWebSocket(sessionId, handleMessage, setIsConnected);
+    const token = getSessionToken(sessionId);
+    const ws = new SessionWebSocket(
+      sessionId,
+      (m) => handleMessageRef.current(m),
+      setIsConnected,
+      token
+    );
     wsRef.current = ws;
 
     return () => {
       ws.close();
       wsRef.current = null;
     };
-  }, [sessionId, handleMessage]);
+  }, [sessionId]);
 
-  const approve = useCallback(
-    (requestId: string) => {
-      wsRef.current?.send({
-        type: "confirmation_response",
-        payload: { request_id: requestId, approved: true },
-      });
-      setPendingConfirmation(null);
-    },
-    []
-  );
+  const approve = useCallback((requestId: string) => {
+    wsRef.current?.send({
+      type: "confirmation_response",
+      payload: { request_id: requestId, approved: true },
+    });
+    setPendingConfirmation((cur) => (cur?.request_id === requestId ? null : cur));
+  }, []);
 
-  const deny = useCallback(
-    (requestId: string) => {
-      wsRef.current?.send({
-        type: "confirmation_response",
-        payload: { request_id: requestId, approved: false },
-      });
-      setPendingConfirmation(null);
-    },
-    []
-  );
+  const deny = useCallback((requestId: string) => {
+    wsRef.current?.send({
+      type: "confirmation_response",
+      payload: { request_id: requestId, approved: false },
+    });
+    setPendingConfirmation((cur) => (cur?.request_id === requestId ? null : cur));
+  }, []);
 
   return { logs, status, pendingConfirmation, isConnected, approve, deny };
 }

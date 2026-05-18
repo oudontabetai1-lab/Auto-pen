@@ -20,7 +20,7 @@ def session_payload():
     return {
         "target": "10.0.0.1",
         "profile": "network",
-        "authorization_token": "authorized for testing",
+        "authorization_token": "I have explicit written authorization to test this lab host.",
         "scope": {"allowed_hosts": ["10.0.0.1"], "allowed_ports": [], "exclude_hosts": []},
         "llm_provider": "ollama",
         "llm_model": "llama3.1",
@@ -37,7 +37,8 @@ async def client(app):
 async def created_session(client, session_payload):
     resp = await client.post("/api/v1/sessions", json=session_payload)
     assert resp.status_code == 201
-    return resp.json()
+    # New response shape: {"session": {...}, "ws_token": "..."}
+    return resp.json()["session"]
 
 
 class TestHealth:
@@ -51,7 +52,9 @@ class TestSessionCRUD:
     async def test_create_session(self, client, session_payload):
         resp = await client.post("/api/v1/sessions", json=session_payload)
         assert resp.status_code == 201
-        data = resp.json()
+        body = resp.json()
+        assert "ws_token" in body and body["ws_token"]
+        data = body["session"]
         assert data["target"] == "10.0.0.1"
         assert data["profile"] == "network"
         assert data["status"] == "pending"
@@ -94,12 +97,15 @@ class TestSessionCRUD:
 class TestRunEndpoint:
     async def test_run_invalid_provider_returns_400(self, client, created_session):
         sid = created_session["id"]
+        # "gemini" passes Pydantic shape but fails factory lookup → 400.
         resp = await client.post(
             f"/api/v1/sessions/{sid}/run",
             json={"llm_provider": "gemini", "llm_model": "gemini-pro"},
         )
         assert resp.status_code == 400
-        assert "gemini" in resp.json()["detail"].lower() or "unknown" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        detail_str = detail if isinstance(detail, str) else json.dumps(detail)
+        assert "gemini" in detail_str.lower() or "unknown" in detail_str.lower()
 
     async def test_run_nonexistent_session(self, client):
         resp = await client.post(

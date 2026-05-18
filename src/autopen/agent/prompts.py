@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
 
 from autopen.state.models import ScanProfile
 

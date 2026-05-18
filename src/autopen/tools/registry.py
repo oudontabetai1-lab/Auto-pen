@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from autopen.tools.base import BaseTool
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -73,8 +76,8 @@ class ToolRegistry:
             try:
                 if t.is_available():
                     result.append(t)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Availability probe failed for tool %s: %s", t.name, exc)
         return result
 
     def get_llm_schemas(self, only_available: bool = True) -> list[dict]:

@@ -11,7 +11,6 @@ Flow per iteration:
 from __future__ import annotations
 
 import asyncio
-import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -26,7 +25,6 @@ from autopen.agent.prompts import (
     build_initial_user_message,
     build_scope_violation_message,
     build_system_prompt,
-    build_tool_error_message,
 )
 from autopen.llm.base import BaseLLMProvider, LLMMessage, ToolCall
 from autopen.security.confirm import HumanConfirmation
@@ -39,7 +37,6 @@ from autopen.state.models import (
     Severity,
     SessionStatus,
 )
-from autopen.reporting.cvss import severity_from_score
 from autopen.tools.base import BaseTool
 from autopen.tools.registry import ToolRegistry
 
@@ -176,7 +173,14 @@ class AgentLoop:
                             "timestamp": self._ts(),
                             "payload": {"code": "step_timeout", "message": f"LLM reasoning timed out after {self.step_timeout}s"},
                         })
-                        break
+                        self.manager.update_status(self.session_id, SessionStatus.TIMED_OUT)
+                        await self._emit({
+                            "type": "session_status",
+                            "session_id": self.session_id,
+                            "timestamp": self._ts(),
+                            "payload": {"status": SessionStatus.TIMED_OUT.value, "step_count": step},
+                        })
+                        return final_summary
 
                 self.manager.increment_step(self.session_id)
 
@@ -293,12 +297,18 @@ class AgentLoop:
             raise
 
         if not final_summary:
-            self.manager.update_status(self.session_id, SessionStatus.COMPLETED)
+            # report_done was never called. Distinguish "ran out of steps"
+            # (INCOMPLETE) from the natural completion path (only reached when
+            # report_done is invoked, which returns early above).
+            terminal_status = (
+                SessionStatus.INCOMPLETE if step >= self.max_steps else SessionStatus.COMPLETED
+            )
+            self.manager.update_status(self.session_id, terminal_status)
             await self._emit({
                 "type": "session_status",
                 "session_id": self.session_id,
                 "timestamp": self._ts(),
-                "payload": {"status": "completed", "step_count": step},
+                "payload": {"status": terminal_status.value, "step_count": step},
             })
 
         return final_summary
